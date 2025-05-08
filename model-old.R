@@ -8,11 +8,6 @@ library(dplyr)
 library(zoo)
 library(forecast)
 
-library(gganimate)
-library(gifski)
-library(transformr)
-
-
 httr::set_config(httr::config(ssl_verifypeer = 0L, ssl_verifyhost = 0L)) # THE API CERTIFICATE IS EXPIRED, REMOVE THIS AS SOON AS POSSIBLE
 
 # API CALL FOR CLIMATE 2019 - 2022
@@ -30,7 +25,7 @@ for (pagenumber in 1:total_pages_estimate) { # Loop until there are no more page
   pagination <- paste0("page=", pagenumber, "&per_page=100")
   url <- paste0(climate_api, pagination, date, geocode)
   
-  resp <- GET(url, add_headers(.headers = c("X-UID-Key" = "jodenapole:27ab1f15-5cf9-4bae-a1e8-971baf371e9d")))
+  resp <- GET(url)
   
   if (http_error(resp)) {
     message(paste("Error:", status_code(resp))) # Handle errors gracefully
@@ -74,7 +69,7 @@ for (pagenumber in 1:total_pages_estimate) { # Loop until there are no more page
   pagination <- paste0("page=", pagenumber, "&per_page=100")
   url <- paste0(climate_api, pagination, date, geocode)
   
-  resp <- GET(url, add_headers(.headers = c("X-UID-Key" = "jodenapole:27ab1f15-5cf9-4bae-a1e8-971baf371e9d")))
+  resp <- GET(url)
   
   if (http_error(resp)) {
     message(paste("Error:", status_code(resp))) # Handle errors gracefully
@@ -113,7 +108,7 @@ for (pagenumber in 1:total_pages_estimate) { # Loop until there are no more page
   pagination <- paste0("&page=", pagenumber, "&per_page=100")
   url <- paste0(dengue_api, date, geocode, pagination)
   
-  resp <- GET(url, add_headers(.headers = c("X-UID-Key" = "jodenapole:27ab1f15-5cf9-4bae-a1e8-971baf371e9d")))
+  resp <- GET(url)
   
   if (http_error(resp)) {
     message(paste("Error:", status_code(resp))) # Handle errors gracefully
@@ -149,7 +144,7 @@ for (pagenumber in 1:total_pages_estimate) { # Loop until there are no more page
   pagination <- paste0("&page=", pagenumber, "&per_page=100")
   url <- paste0(dengue_api, date, geocode, pagination)
   
-  resp <- GET(url, add_headers(.headers = c("X-UID-Key" = "jodenapole:27ab1f15-5cf9-4bae-a1e8-971baf371e9d")))
+  resp <- GET(url)
   
   if (http_error(resp)) {
     message(paste("Error:", status_code(resp))) # Handle errors gracefully
@@ -199,13 +194,7 @@ dengue_data_ordered$casos_lag4[2] = 124 # Same logic applies
 dengue_data_ordered$casos_lag4[3] = 147 # Same logic applies
 dengue_data_ordered$casos_lag4[4] = 179 # Same logic applies
 
-#TEMP MED LAG 1
-dengue_data_ordered$temp_med_lag1 <- dplyr::lag(dengue_data_ordered$tempmed, 1)
-dengue_data_ordered$temp_med_lag1[1] = dengue_data_ordered$temp_med_lag1[2]
 
-#UMID MED LAG 1
-dengue_data_ordered$umid_med_lag1 <- dplyr::lag(dengue_data_ordered$umidmed, 1)
-dengue_data_ordered$umid_med_lag1[1] = dengue_data_ordered$umid_med_lag1[2]
 
 # MOVING STD DEVIATION
 dengue_data_ordered$casoslag1_mov_sd <- rollapply(dengue_data_ordered$casos_lag1,
@@ -366,8 +355,7 @@ x_train <- cbind(
 
 x_train_wavg <- cbind(
   # dengue_data_ordered$tempmin,
-  dengue_data_ordered$temp_med_lag1,
-  dengue_data_ordered$umid_med_lag1,
+  # dengue_data_ordered$tempmed,
   # dengue_data_ordered$tempmax,
   dengue_data_ordered$casos_lag1,
   dengue_data_ordered$casos_lag2,
@@ -378,7 +366,6 @@ x_train_wavg <- cbind(
   # dengue_data_ordered$humidity_sin_interaction,
   # dengue_data_ordered$humidity_cos_interaction,
   dengue_data_ordered$casoslag1_mov_sd,
-  dengue_data_ordered$avg,
   dengue_data_ordered$wavg
   # dengue_data_ordered$temp_sin_interaction,
   # dengue_data_ordered$temp_cos_interaction
@@ -386,11 +373,9 @@ x_train_wavg <- cbind(
 
 # x_train <- apply(x_train, 2, scale)
 
-x_train_df <- as.data.frame(x_train_wavg)
+x_train_df <- as.data.frame(x_train)
 
 colnames(x_train_df) <- c(
-  "temp_med_lag_1",
-  "umid_med_lag_1",
   "casos_lag1",
   "casos_lag2",
   "casos_lag3",
@@ -400,11 +385,10 @@ colnames(x_train_df) <- c(
   # "humidity_sin_interaction",
   # "humidity_cos_interaction",
   "casoslag1_mov_sd",
-  "avg",
-  "wavg"
+  "avg"
   # "temp_sin_interaction",
   # "temp_cos_interaction"
-)
+  )
 
 
 
@@ -416,8 +400,7 @@ y_train <- cbind(
 # USING 2023 DATA FOR VALIDATION
 x_val2023 <- cbind(
   # dengue_data_ordered_test$tempmin,
-  dengue_data_ordered_test$tempmed,
-  dengue_data_ordered_test$umidmed,
+  # dengue_data_ordered_test$tempmed,
   # dengue_data_ordered_test$tempmax,
   dengue_data_ordered_test$casos_lag1,
   dengue_data_ordered_test$casos_lag2,
@@ -428,8 +411,7 @@ x_val2023 <- cbind(
   # dengue_data_ordered_test$humidity_sin_interaction,
   # dengue_data_ordered_test$humidity_cos_interaction,
   dengue_data_ordered_test$casoslag1_mov_sd,
-  dengue_data_ordered_test$avg,
-  dengue_data_ordered_test$wavg,
+  dengue_data_ordered_test$avg
   # dengue_data_ordered_test$temp_sin_interaction,
   # dengue_data_ordered_test$temp_cos_interaction
 )
@@ -527,89 +509,6 @@ plot_results <- function(mean_predictions_unseen) {
   
 }
 
-plot_results_year <- function(mean_predictions_unseen) {
-  # Calculate residuals for the predicted weeks
-  residual <- head(y_val2023, weeks_predicted) - mean_predictions_unseen
-  
-  # Create a full data frame with all 52 weeks of actual data
-  full_plot_data <- data.frame(
-    week_number = 1:52,
-    actual_cases = y_val2023_df$casos
-  )
-  
-  # Add prediction data to the full data frame
-  # Only add predictions for the specific weeks we've predicted
-  full_plot_data$predicted <- NA  # Initialize with NA for all weeks
-  full_plot_data$lower_ci <- NA   # Initialize lower confidence interval
-  full_plot_data$upper_ci <- NA   # Initialize upper confidence interval
-  
-  # Add prediction data starting at the weeks_label position
-  prediction_weeks <- weeks_label:(weeks_label + weeks_predicted - 1)
-  full_plot_data$predicted[prediction_weeks] <- mean_predictions_unseen
-  
-  # Add confidence intervals if available
-  if(exists("li_predictions_2023") && exists("ui_predictions_2023")) {
-    full_plot_data$lower_ci[prediction_weeks] <- li_predictions_2023
-    full_plot_data$upper_ci[prediction_weeks] <- ui_predictions_2023
-  }
-  
-  # Print the predictions vs actual for the predicted weeks
-  prediction_data <- data.frame(
-    week = prediction_weeks,
-    actual = y_val2023_df$casos[prediction_weeks],
-    predicted = mean_predictions_unseen
-  )
-  print("Prediction Results:")
-  print(prediction_data)
-  
-  # Create the full year plot using ggplot2
-  p1 <- ggplot(full_plot_data, aes(x = week_number)) +
-    geom_line(aes(y = actual_cases, color = "Actual Dengue Cases"), linewidth = 1) +
-    geom_point(aes(y = predicted, color = "Prediction"), size = 1, na.rm = TRUE) +
-    geom_line(aes(y = predicted, color = "Prediction"), linewidth = 1, na.rm = TRUE) +
-    labs(title = paste("Dengue Cases Predictions for 2023 - RMSE:", round(new_rmse, 2)),
-         subtitle = paste("Predictions starting from week", weeks_label),
-         x = "Week Number",
-         y = "Number of Cases",
-         color = "Data Type") +
-    scale_color_manual(values = c("Actual Dengue Cases" = "black", "Prediction" = "red")) +
-    theme_bw() +
-    theme(
-      legend.position = "bottom",
-      plot.title = element_text(hjust = 0.5, face = "bold"),
-      plot.subtitle = element_text(hjust = 0.5)
-    )
-  
-  # If confidence intervals are available, create a second plot with them
-  if(exists("li_predictions_2023") && exists("ui_predictions_2023")) {
-    p2 <- ggplot(full_plot_data, aes(x = week_number)) +
-      geom_line(aes(y = actual_cases, color = "Actual Dengue Cases"), linewidth = 1) +
-      geom_ribbon(aes(ymin = lower_ci, ymax = upper_ci), 
-                  fill = "red", alpha = 0.2, na.rm = TRUE) +
-      geom_point(aes(y = predicted, color = "Prediction"), size = 1, na.rm = TRUE) +
-      geom_line(aes(y = predicted, color = "Prediction"), linewidth = 1, na.rm = TRUE) +
-      labs(title = paste("Dengue Cases Predictions with Confidence Intervals - RMSE:", round(new_rmse, 2)),
-           subtitle = paste("Predictions starting from week", weeks_label),
-           x = "Week Number",
-           y = "Number of Cases",
-           color = "Data Type") +
-      scale_color_manual(values = c("Actual Dengue Cases" = "black", "Prediction" = "red")) +
-      theme_bw() +
-      theme(
-        legend.position = "bottom",
-        plot.title = element_text(hjust = 0.5, face = "bold"),
-        plot.subtitle = element_text(hjust = 0.5)
-      )
-    
-    # Return both plots
-    print(p1)
-    # print(p2)
-  } else {
-    # Return just the main plot if no confidence intervals
-    print(p1)
-  }
-}
-
 plot_var_imp <- function() {
   # Assuming 'post' is your trained BART model and x_train has column names
   var_imp <- post$varcount.mean
@@ -630,7 +529,7 @@ plot_var_imp <- function() {
     "wavg"
     # "temp_sin_interaction",
     # "temp_cos_interaction"
-  )
+    )
   # Create a data frame for plotting (much easier with ggplot2)
   importance_df <- data.frame(
     Variable = names(var_imp),  # Use names from your training data
@@ -650,68 +549,6 @@ plot_var_imp <- function() {
   
 }
 
-# Function to create animated visualization
-create_prediction_animation_year <- function(all_predictions, output_file = "dengue_predictions_animation.mp4") {
-  # Create a dataframe with all actual values for reference
-  full_actual <- data.frame(
-    week = 1:52,
-    actual = y_val2023_df$casos
-  )
-  
-  # Get the unique base weeks to use as animation frames
-  base_week <- unique(all_predictions$base_week)
-  
-  # Create the plot
-  p <- ggplot() +
-    # Plot full year of actual values
-    geom_line(data = full_actual, aes(x = week, y = actual), color = "black", alpha = 0.5) +
-    geom_point(data = full_actual, aes(x = week, y = actual), color = "black", alpha = 0.5, size = 1) +
-    
-    # Plot predictions for current base week
-    geom_ribbon(data = all_predictions, 
-                aes(x = prediction_week, ymin = lower_ci, ymax = upper_ci,
-                    group = base_week), 
-                fill = "red", alpha = 0.2) +
-    geom_line(data = all_predictions, 
-              aes(x = prediction_week, y = predicted, group = base_week), 
-              color = "red", size = 1) +
-    geom_point(data = all_predictions, 
-               aes(x = prediction_week, y = predicted, group = base_week), 
-               color = "red", size = 2) +
-    
-    # Highlight the base week with a vertical line
-    # geom_vline(aes(xintercept = base_week), color = "blue", linetype = "dashed") +
-    
-    # Add labels and theme
-    labs(title = "Dengue Case Predictions for 2023",
-         subtitle = "Base Week: {closest_state}",
-         x = "Week of Year",
-         y = "Number of Cases",
-         caption = "Actual (black) vs Predictions (red) | RMSE: {predictions_data[predictions_data$base_week == closest_state, 'rmse'][1]}") +
-    theme_bw() +
-    theme(plot.title = element_text(hjust = 0.5, face = "bold"),
-          plot.subtitle = element_text(hjust = 0.5)) +
-    
-    # Set up animation
-    transition_states(base_week, 
-                      transition_length = 2, 
-                      state_length = 3) +
-    ease_aes('cubic-in-out')
-  
-  # Render and save the animation
-  animated_plot <- animate(p, 
-                           nframes = length(base_week) * 5, 
-                           fps = 5, 
-                           width = 800, 
-                           height = 600,
-                           renderer = av_renderer(output_file))
-  
-  return(animated_plot)
-}
-
-
-
-
 # TRAINING
 
 set.seed(7)
@@ -720,7 +557,7 @@ nd <- 5000
 k_value <- 2
 power_value <- 2
 ntree_value <- 150L
-# post <- wbart(x_train, y_train, nskip = burn, ndpost = nd, k=k_value, power = power_value, ntree = ntree_value )
+post <- wbart(x_train, y_train, nskip = burn, ndpost = nd, k=k_value, power = power_value, ntree = ntree_value )
 post_wavg <- wbart(x_train_wavg, y_train, nskip = burn, ndpost = nd, k=k_value, power = power_value, ntree = ntree_value )
 
 
@@ -737,7 +574,7 @@ new_rmse <- calculate_rmse(y_val2023, mean_predictions_2023)
 
 
 
-# TESTING ONE WEEK AT A TIME
+# TESTING
 
 week_base = 7
 
@@ -763,20 +600,20 @@ for (last_week in week_base:week_base) {
   v3 <- y_val2023_df$casos[last_week - 2]
   v4 <- y_val2023_df$casos[last_week - 3]
   
-  # weekly_averages <- climate_data_weekly %>%
-  #   group_by(week_of_year) %>%
-  #   summarize(
-  #     avg_humidity = mean(umid_med, na.rm = TRUE),
-  #     avg_temperature = mean(temp_med, na.rm = TRUE), 
-  #   )
-  # weekly_averages$sin_week = sin(2 * pi * (weekly_averages$week_of_year / 52))
-  # weekly_averages$cos_week = cos(2 * pi * (weekly_averages$week_of_year / 52))
-  # 
-  # weekly_averages$avg_humid_sin_interaction = weekly_averages$avg_humidity * weekly_averages$sin_week
-  # weekly_averages$avg_humid_cos_interaction = weekly_averages$avg_humidity * weekly_averages$cos_week
-  # 
-  # weekly_averages$avg_temp_sin_interaction = weekly_averages$avg_temperature * weekly_averages$sin_week
-  # weekly_averages$avg_temp_cos_interaction = weekly_averages$avg_temperature * weekly_averages$cos_week
+  weekly_averages <- climate_data_weekly %>%
+    group_by(week_of_year) %>%
+    summarize(
+      avg_humidity = mean(umid_med, na.rm = TRUE),
+      avg_temperature = mean(temp_med, na.rm = TRUE), 
+    )
+  weekly_averages$sin_week = sin(2 * pi * (weekly_averages$week_of_year / 52))
+  weekly_averages$cos_week = cos(2 * pi * (weekly_averages$week_of_year / 52))
+  
+  weekly_averages$avg_humid_sin_interaction = weekly_averages$avg_humidity * weekly_averages$sin_week
+  weekly_averages$avg_humid_cos_interaction = weekly_averages$avg_humidity * weekly_averages$cos_week
+  
+  weekly_averages$avg_temp_sin_interaction = weekly_averages$avg_temperature * weekly_averages$sin_week
+  weekly_averages$avg_temp_cos_interaction = weekly_averages$avg_temperature * weekly_averages$cos_week
   
   for (week in 1:weeks_predicted) {
     
@@ -787,7 +624,7 @@ for (last_week in week_base:week_base) {
       current_lag4 <- v4
       mov_sd <- sd(c(current_lag1, current_lag2, current_lag3))
       wavg <- ((current_lag1 * 3) + (current_lag2 * 2) + (current_lag3)) / 6
-      avg <- ((current_lag1) + (current_lag2) + (current_lag3)) / 3
+      avg <- (current_lag1) + (current_lag2) + (current_lag3) / 3
       week_number <- y_val2023_df$week_number[last_week + week]
     } else if (week == 2) {
       current_lag1 <- mean_predictions_2023[1]
@@ -797,7 +634,7 @@ for (last_week in week_base:week_base) {
       mov_sd <- sd(c(current_lag1, current_lag2, current_lag3))
       wavg <- ((current_lag1 * 3) + (current_lag2 * 2) + (current_lag3)) / 6
       week_number <- y_val2023_df$week_number[last_week + week]
-      avg <- ((current_lag1) + (current_lag2) + (current_lag3)) / 3
+      avg <- (current_lag1) + (current_lag2) + (current_lag3) / 3
     } else if (week == 3) {
       current_lag1 <- mean_predictions_2023[2]
       current_lag2 <- mean_predictions_2023[1]
@@ -806,7 +643,7 @@ for (last_week in week_base:week_base) {
       mov_sd <- sd(c(current_lag1, current_lag2, current_lag3))
       wavg <- ((current_lag1 * 3) + (current_lag2 * 2) + (current_lag3)) / 6
       week_number <- y_val2023_df$week_number[last_week + week]
-      avg <- ((current_lag1) + (current_lag2) + (current_lag3)) / 3
+      avg <- (current_lag1) + (current_lag2) + (current_lag3) / 3
     } else if (week == 4) {
       current_lag1 <- mean_predictions_2023[3]
       current_lag2 <- mean_predictions_2023[2]
@@ -815,7 +652,7 @@ for (last_week in week_base:week_base) {
       mov_sd <- sd(c(current_lag1, current_lag2, current_lag3))
       wavg <- ((current_lag1 * 3) + (current_lag2 * 2) + (current_lag3)) / 6
       week_number <- y_val2023_df$week_number[last_week + week]
-      avg <- ((current_lag1) + (current_lag2) + (current_lag3)) / 3
+      avg <- (current_lag1) + (current_lag2) + (current_lag3) / 3
     } else {
       current_lag1 <- mean_predictions_2023[4]
       current_lag2 <- mean_predictions_2023[3]
@@ -824,7 +661,7 @@ for (last_week in week_base:week_base) {
       mov_sd <- sd(c(current_lag1, current_lag2, current_lag3))
       wavg <- ((current_lag1 * 3) + (current_lag2 * 2) + (current_lag3)) / 6
       week_number <- y_val2023_df$week_number[last_week + week]
-      avg <- ((current_lag1) + (current_lag2) + (current_lag3)) / 3
+      avg <- (current_lag1) + (current_lag2) + (current_lag3) / 3
     }
     
     recursive_data <- data.frame(
@@ -837,20 +674,19 @@ for (last_week in week_base:week_base) {
       # humidity_sin_interaction = weekly_averages$avg_humid_sin_interaction[week_base + 1],
       # humidity_cos_interaction = weekly_averages$avg_humid_cos_interaction[week_base + 1],
       casoslag1_mov_sd = mov_sd,
-      avg,
-      wavg
+      avg
       # temp_sin_interaction = weekly_averages$avg_temp_sin_interaction[week_base + 1],
       # temp_cos_interaction = weekly_averages$avg_temp_cos_interaction[week_base + 1]
       
     )
-    
+
     
     # test_data <- as.data.frame(recursive_data)
     # test_data$casos <- y_val2023[week]
     # lm_predictions <- predict(lm_model, newdata = test_data)
     
     
-    prediction <- predict(post_wavg, newdata = recursive_data)
+    prediction <- predict(post, newdata = recursive_data)
     mean_prediction_unseen <- apply(prediction, 2, mean)
     li_prediction_unseen <- apply(prediction, 2, quantile, probs = 0.025)
     ui_prediction_unseen <- apply(prediction, 2, quantile, probs = 0.975)
@@ -872,153 +708,9 @@ for (last_week in week_base:week_base) {
 
 mean_predictions_unseen <- head(mean_predictions_2023, weeks_predicted)
 weeks_label = week_base + 1 
-plot_results_year(mean_predictions_unseen)
+
+
 plot_results(mean_predictions_unseen)
+
 plot_var_imp()
-
-
-
-
-# Create a function to generate predictions for a range of base weeks
-generate_predictions_across_year <- function(start_week, end_week, weeks_ahead = 4) {
-  # Create a data frame to store all predictions
-  all_predictions <- data.frame()
-  
-  # Loop through each base week
-  for (week_base in start_week:end_week) {
-    # Initialize vectors for the current set of predictions
-    mean_predictions_2023 <- numeric(weeks_ahead)
-    li_predictions_2023 <- numeric(weeks_ahead)
-    ui_predictions_2023 <- numeric(weeks_ahead)
-    
-    # Get recent values for prediction
-    v1 <- y_val2023_df$casos[week_base]
-    v2 <- y_val2023_df$casos[week_base - 1]
-    v3 <- y_val2023_df$casos[week_base - 2]
-    v4 <- y_val2023_df$casos[week_base - 3]
-    
-    # Get actual values for comparison
-    actual_values <- y_val2023_df$casos[(week_base + 1):(week_base + weeks_ahead)]
-    
-    weekly_averages <- climate_data_weekly %>%
-      group_by(week_of_year) %>%
-      summarize(
-        avg_humidity = mean(umid_med, na.rm = TRUE),
-        avg_temperature = mean(temp_med, na.rm = TRUE),
-      )
-    
-    # Generate predictions for each week ahead
-    for (week in 1:weeks_ahead) {
-      # Set up lag values based on which week we're predicting
-      if (week == 1) {
-        temp_med_lag <- weekly_averages$avg_temperature[week_base]
-        umid_med_lag <- weekly_averages$avg_humidity[week_base]
-        current_lag1 <- v1
-        current_lag2 <- v2
-        current_lag3 <- v3
-        current_lag4 <- v4
-        mov_sd <- sd(c(current_lag1, current_lag2, current_lag3))
-        avg <- mean(c(current_lag1, current_lag2, current_lag3))
-        wavg <- ((current_lag1 * 3) + (current_lag2 * 2) + (current_lag3)) / 6
-        week_number <- y_val2023_df$week_number[week_base + week]
-      } else if (week == 2) {
-        temp_med_lag <- weekly_averages$avg_temperature[week_base]
-        umid_med_lag <- weekly_averages$avg_humidity[week_base]
-        current_lag1 <- mean_predictions_2023[1]
-        current_lag2 <- v1
-        current_lag3 <- v2
-        current_lag4 <- v3
-        mov_sd <- sd(c(current_lag1, current_lag2, current_lag3))
-        avg <- mean(c(current_lag1, current_lag2, current_lag3))
-        wavg <- ((current_lag1 * 3) + (current_lag2 * 2) + (current_lag3)) / 6
-        week_number <- y_val2023_df$week_number[week_base + week]
-      } else if (week == 3) {
-        temp_med_lag <- weekly_averages$avg_temperature[week_base]
-        umid_med_lag <- weekly_averages$avg_humidity[week_base]
-        current_lag1 <- mean_predictions_2023[2]
-        current_lag2 <- mean_predictions_2023[1]
-        current_lag3 <- v1
-        current_lag4 <- v2
-        mov_sd <- sd(c(current_lag1, current_lag2, current_lag3))
-        avg <- mean(c(current_lag1, current_lag2, current_lag3))
-        wavg <- ((current_lag1 * 3) + (current_lag2 * 2) + (current_lag3)) / 6
-        week_number <- y_val2023_df$week_number[week_base + week]
-      } else if (week == 4) {
-        temp_med_lag <- weekly_averages$avg_temperature[week_base]
-        umid_med_lag <- weekly_averages$avg_humidity[week_base]
-        current_lag1 <- mean_predictions_2023[3]
-        current_lag2 <- mean_predictions_2023[2]
-        current_lag3 <- mean_predictions_2023[1]
-        current_lag4 <- v1
-        mov_sd <- sd(c(current_lag1, current_lag2, current_lag3))
-        avg <- mean(c(current_lag1, current_lag2, current_lag3))
-        wavg <- ((current_lag1 * 3) + (current_lag2 * 2) + (current_lag3)) / 6
-        week_number <- y_val2023_df$week_number[week_base + week]
-      }
-      
-      # Create prediction data
-      recursive_data <- data.frame(
-        temp_med_lag1 = temp_med_lag,
-        umid_med_lag1 = umid_med_lag,
-        casos_lag1 = current_lag1,
-        casos_lag2 = current_lag2,
-        casos_lag3 = current_lag3,
-        casos_lag4 = current_lag4,
-        sin_year = sin(2 * pi * week_number/52),
-        cos_year = cos(2 * pi * week_number/52),
-        casoslag1_mov_sd = mov_sd,
-        avg = avg,
-        wavg = wavg
-      )
-      
-      # Make prediction
-      prediction <- predict(post_wavg, newdata = recursive_data)
-      mean_prediction <- apply(prediction, 2, mean)
-      li_prediction <- apply(prediction, 2, quantile, probs = 0.025)
-      ui_prediction <- apply(prediction, 2, quantile, probs = 0.975)
-      
-      # Store predictions
-      mean_predictions_2023[week] <- mean_prediction
-      li_predictions_2023[week] <- li_prediction
-      ui_predictions_2023[week] <- ui_prediction
-    }
-    
-    # Calculate RMSE for current prediction
-    current_rmse <- calculate_rmse(actual_values, mean_predictions_2023)
-    
-    # Add the current predictions to the overall data frame
-    for (i in 1:weeks_ahead) {
-      prediction_week <- week_base + i
-      
-      # Skip if prediction week is out of range
-      if (prediction_week > 52) {
-        next
-      }
-      
-      new_row <- data.frame(
-        base_week = week_base,
-        prediction_week = prediction_week,
-        actual = y_val2023_df$casos[prediction_week],
-        predicted = mean_predictions_2023[i],
-        lower_ci = li_predictions_2023[i],
-        upper_ci = ui_predictions_2023[i],
-        horizon = i,  # How many weeks ahead prediction
-        rmse = current_rmse
-      )
-      
-      all_predictions <- rbind(all_predictions, new_row)
-    }
-    
-    # Print progress
-    cat(sprintf("Processed base week %d/%d\r", week_base, end_week))
-  }
-  
-  return(all_predictions)
-}
-
-# 1. Generate predictions for all base weeks
-all_predictions <- generate_predictions_across_year(start_week = 4, end_week = 48) #COM CLIMA FICOU RUIM 
-
-# 2. Create and save the animation
-create_prediction_animation_year(all_predictions, "dengue_predictions_2023.mp4")
 
