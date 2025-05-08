@@ -7,7 +7,7 @@ library(ggplot2)
 library(dplyr)
 library(zoo)
 library(forecast)
-
+library(glue)
 library(gganimate)
 library(gifski)
 library(transformr)
@@ -199,14 +199,6 @@ dengue_data_ordered$casos_lag4[2] = 124 # Same logic applies
 dengue_data_ordered$casos_lag4[3] = 147 # Same logic applies
 dengue_data_ordered$casos_lag4[4] = 179 # Same logic applies
 
-#TEMP MED LAG 1
-dengue_data_ordered$temp_med_lag1 <- dplyr::lag(dengue_data_ordered$tempmed, 1)
-dengue_data_ordered$temp_med_lag1[1] = dengue_data_ordered$temp_med_lag1[2]
-
-#UMID MED LAG 1
-dengue_data_ordered$umid_med_lag1 <- dplyr::lag(dengue_data_ordered$umidmed, 1)
-dengue_data_ordered$umid_med_lag1[1] = dengue_data_ordered$umid_med_lag1[2]
-
 # MOVING STD DEVIATION
 dengue_data_ordered$casoslag1_mov_sd <- rollapply(dengue_data_ordered$casos_lag1,
                                                   width = window_size,
@@ -264,8 +256,93 @@ dengue_data_ordered$temp_cos_interaction <- (dengue_data_ordered$tempmed * dengu
 
 
 
-## FEATURE ENGENEERING TEST ##
+#TEMP MED LAG
+dengue_data_ordered$temp_med_lag1 <- dplyr::lag(dengue_data_ordered$tempmed, 1)
+dengue_data_ordered$temp_med_lag2 <- dplyr::lag(dengue_data_ordered$tempmed, 2)
+dengue_data_ordered$temp_med_lag3 <- dplyr::lag(dengue_data_ordered$tempmed, 3)
+dengue_data_ordered$temp_med_lag4 <- dplyr::lag(dengue_data_ordered$tempmed, 4)
 
+#UMID MED LAG
+dengue_data_ordered$umid_med_lag1 <- dplyr::lag(dengue_data_ordered$umidmed, 1)
+dengue_data_ordered$umid_med_lag2 <- dplyr::lag(dengue_data_ordered$umidmed, 2)
+dengue_data_ordered$umid_med_lag3 <- dplyr::lag(dengue_data_ordered$umidmed, 3)
+dengue_data_ordered$umid_med_lag4 <- dplyr::lag(dengue_data_ordered$umidmed, 4)
+
+
+
+# Calculate average lag values by week of year
+temp_weekly_avg <- dengue_data_ordered %>%
+  group_by(week_of_year) %>%
+  summarize(
+    avg_tempmed_lag1 = mean(temp_med_lag1, na.rm = TRUE),
+    avg_umidmed_lag1 = mean(umid_med_lag1, na.rm = TRUE),
+    
+    avg_tempmed_lag2 = mean(temp_med_lag2, na.rm = TRUE),
+    avg_umidmed_lag2 = mean(umid_med_lag2, na.rm = TRUE),
+    
+    avg_tempmed_lag3 = mean(temp_med_lag3, na.rm = TRUE),
+    avg_umidmed_lag3 = mean(umid_med_lag3, na.rm = TRUE),
+    
+    avg_tempmed_lag4 = mean(temp_med_lag4, na.rm = TRUE),
+    avg_umidmed_lag4 = mean(umid_med_lag4, na.rm = TRUE)
+  )
+
+# Vectorized approach
+fill_lag_columns <- function(data, temp_weekly_avg) {
+  # Define pairs of columns (original column, average column)
+  column_pairs <- list(
+    list("temp_med_lag1", "avg_tempmed_lag1"),
+    list("temp_med_lag2", "avg_tempmed_lag2"),
+    list("temp_med_lag3", "avg_tempmed_lag3"),
+    list("temp_med_lag4", "avg_tempmed_lag4"),
+    list("umid_med_lag1", "avg_umidmed_lag1"),
+    list("umid_med_lag2", "avg_umidmed_lag2"),
+    list("umid_med_lag3", "avg_umidmed_lag3"),
+    list("umid_med_lag4", "avg_umidmed_lag4")
+  )
+  
+  # Create a lookup table for each weekly average column
+  lookup_tables <- list()
+  for (col_pair in column_pairs) {
+    avg_col <- col_pair[[2]]
+    lookup_tables[[avg_col]] <- setNames(
+      temp_weekly_avg[[avg_col]],
+      temp_weekly_avg$week_of_year
+    )
+  }
+  
+  # For each column pair
+  for (col_pair in column_pairs) {
+    col <- col_pair[[1]]
+    avg_col <- col_pair[[2]]
+    
+    # Find rows with NA values
+    na_rows <- which(is.na(data[[col]]))
+    
+    if (length(na_rows) > 0) {
+      # Replace NA values with the corresponding week's average
+      data[[col]][na_rows] <- lookup_tables[[avg_col]][as.character(data$week_of_year[na_rows])]
+    }
+  }
+  
+  return(data)
+}
+
+# Apply the function to your data
+dengue_data_ordered <- fill_lag_columns(dengue_data_ordered, temp_weekly_avg)
+
+# Remove NA from week 53 of 2020
+dengue_data_ordered$temp_med_lag1[104] <- dengue_data_ordered$temp_med_lag1[103]
+dengue_data_ordered$temp_med_lag2[104] <- dengue_data_ordered$temp_med_lag2[103]
+dengue_data_ordered$temp_med_lag3[104] <- dengue_data_ordered$temp_med_lag3[103]
+dengue_data_ordered$temp_med_lag4[104] <- dengue_data_ordered$temp_med_lag4[103]
+
+dengue_data_ordered$umid_med_lag1[104] <- dengue_data_ordered$umid_med_lag1[103]
+dengue_data_ordered$umid_med_lag2[104] <- dengue_data_ordered$umid_med_lag2[103]
+dengue_data_ordered$umid_med_lag3[104] <- dengue_data_ordered$umid_med_lag3[103]
+dengue_data_ordered$umid_med_lag4[104] <- dengue_data_ordered$umid_med_lag4[103]
+
+## FEATURE ENGENEERING TEST ##
 
 # 1 WEEK LAG
 dengue_data_ordered_test$casos_lag1 <- dplyr::lag(dengue_data_ordered_test$casos, 1)
@@ -347,63 +424,45 @@ dengue_data_ordered_test$temp_cos_interaction <- (climate_data_test_weekly$temp_
 
 # ORGANAZING DATA IN TRAIN SAMPLES
 x_train <- cbind(
-  # dengue_data_ordered$tempmin,
-  # dengue_data_ordered$tempmed,
-  # dengue_data_ordered$tempmax,
   dengue_data_ordered$casos_lag1,
   dengue_data_ordered$casos_lag2,
   dengue_data_ordered$casos_lag3,
   dengue_data_ordered$casos_lag4,
-  dengue_data_ordered$sin_year,
-  dengue_data_ordered$cos_year,
-  # dengue_data_ordered$humidity_sin_interaction,
-  # dengue_data_ordered$humidity_cos_interaction,
-  dengue_data_ordered$casoslag1_mov_sd,
-  dengue_data_ordered$avg
-  # dengue_data_ordered$temp_sin_interaction,
-  # dengue_data_ordered$temp_cos_interaction
-)
-
-x_train_wavg <- cbind(
-  # dengue_data_ordered$tempmin,
   dengue_data_ordered$temp_med_lag1,
+  dengue_data_ordered$temp_med_lag2,
+  dengue_data_ordered$temp_med_lag3,
+  dengue_data_ordered$temp_med_lag4,
   dengue_data_ordered$umid_med_lag1,
-  # dengue_data_ordered$tempmax,
-  dengue_data_ordered$casos_lag1,
-  dengue_data_ordered$casos_lag2,
-  dengue_data_ordered$casos_lag3,
-  dengue_data_ordered$casos_lag4,
+  dengue_data_ordered$umid_med_lag2,
+  dengue_data_ordered$umid_med_lag3,
+  dengue_data_ordered$umid_med_lag4,
   dengue_data_ordered$sin_year,
   dengue_data_ordered$cos_year,
-  # dengue_data_ordered$humidity_sin_interaction,
-  # dengue_data_ordered$humidity_cos_interaction,
   dengue_data_ordered$casoslag1_mov_sd,
   dengue_data_ordered$avg,
   dengue_data_ordered$wavg
-  # dengue_data_ordered$temp_sin_interaction,
-  # dengue_data_ordered$temp_cos_interaction
 )
 
-# x_train <- apply(x_train, 2, scale)
-
-x_train_df <- as.data.frame(x_train_wavg)
+x_train_df <- as.data.frame(x_train)
 
 colnames(x_train_df) <- c(
-  "temp_med_lag_1",
-  "umid_med_lag_1",
   "casos_lag1",
   "casos_lag2",
   "casos_lag3",
   "casos_lag4",
+  "temp_med_lag1",
+  "temp_med_lag2",
+  "temp_med_lag3",
+  "temp_med_lag4",
+  "umid_med_lag1",
+  "umid_med_lag2",
+  "umid_med_lag3",
+  "umid_med_lag4",
   "sin_year",
   "cos_year",
-  # "humidity_sin_interaction",
-  # "humidity_cos_interaction",
   "casoslag1_mov_sd",
   "avg",
   "wavg"
-  # "temp_sin_interaction",
-  # "temp_cos_interaction"
 )
 
 
@@ -415,23 +474,15 @@ y_train <- cbind(
 
 # USING 2023 DATA FOR VALIDATION
 x_val2023 <- cbind(
-  # dengue_data_ordered_test$tempmin,
-  dengue_data_ordered_test$tempmed,
-  dengue_data_ordered_test$umidmed,
-  # dengue_data_ordered_test$tempmax,
   dengue_data_ordered_test$casos_lag1,
   dengue_data_ordered_test$casos_lag2,
   dengue_data_ordered_test$casos_lag3,
   dengue_data_ordered_test$casos_lag4,
   dengue_data_ordered_test$sin_year,
   dengue_data_ordered_test$cos_year,
-  # dengue_data_ordered_test$humidity_sin_interaction,
-  # dengue_data_ordered_test$humidity_cos_interaction,
   dengue_data_ordered_test$casoslag1_mov_sd,
   dengue_data_ordered_test$avg,
-  dengue_data_ordered_test$wavg,
-  # dengue_data_ordered_test$temp_sin_interaction,
-  # dengue_data_ordered_test$temp_cos_interaction
+  dengue_data_ordered_test$wavg
 )
 
 
@@ -622,14 +673,19 @@ plot_var_imp <- function() {
     "casos_lag2",
     "casos_lag3",
     "casos_lag4",
+    "temp_med_lag1",
+    "temp_med_lag2",
+    "temp_med_lag3",
+    "temp_med_lag4",
+    "umid_med_lag1",
+    "umid_med_lag2",
+    "umid_med_lag3",
+    "umid_med_lag4",
     "sin_year",
     "cos_year",
-    # "humid_sin_interaction",
-    # "humid_cos_interaction",
     "casoslag1_mov_sd",
+    "avg",
     "wavg"
-    # "temp_sin_interaction",
-    # "temp_cos_interaction"
   )
   # Create a data frame for plotting (much easier with ggplot2)
   importance_df <- data.frame(
@@ -651,7 +707,7 @@ plot_var_imp <- function() {
 }
 
 # Function to create animated visualization
-create_prediction_animation_year <- function(all_predictions, output_file = "dengue_predictions_animation.mp4") {
+create_prediction_animation_year <- function(all_predictions, output_format, output_file) {
   # Create a dataframe with all actual values for reference
   full_actual <- data.frame(
     week = 1:52,
@@ -704,7 +760,12 @@ create_prediction_animation_year <- function(all_predictions, output_file = "den
                            fps = 5, 
                            width = 800, 
                            height = 600,
-                           renderer = av_renderer(output_file))
+                           renderer = if(output_format == "gif") {
+                             gifski_renderer(output_file)
+                           } else if(output_format == "mp4") {
+                             av_renderer(output_file)
+                           }
+  )
   
   return(animated_plot)
 }
@@ -720,8 +781,7 @@ nd <- 5000
 k_value <- 2
 power_value <- 2
 ntree_value <- 150L
-# post <- wbart(x_train, y_train, nskip = burn, ndpost = nd, k=k_value, power = power_value, ntree = ntree_value )
-post_wavg <- wbart(x_train_wavg, y_train, nskip = burn, ndpost = nd, k=k_value, power = power_value, ntree = ntree_value )
+post <- wbart(x_train, y_train, nskip = burn, ndpost = nd, k=k_value, power = power_value, ntree = ntree_value )
 
 
 # plot(post$sigma, ylab = "post$sigma", type = "l")
@@ -850,7 +910,7 @@ for (last_week in week_base:week_base) {
     # lm_predictions <- predict(lm_model, newdata = test_data)
     
     
-    prediction <- predict(post_wavg, newdata = recursive_data)
+    prediction <- predict(post, newdata = recursive_data)
     mean_prediction_unseen <- apply(prediction, 2, mean)
     li_prediction_unseen <- apply(prediction, 2, quantile, probs = 0.025)
     ui_prediction_unseen <- apply(prediction, 2, quantile, probs = 0.975)
@@ -958,8 +1018,8 @@ generate_predictions_across_year <- function(start_week, end_week, weeks_ahead =
       
       # Create prediction data
       recursive_data <- data.frame(
-        temp_med_lag1 = temp_med_lag,
-        umid_med_lag1 = umid_med_lag,
+        # temp_med_lag1 = temp_med_lag,
+        # umid_med_lag1 = umid_med_lag,
         casos_lag1 = current_lag1,
         casos_lag2 = current_lag2,
         casos_lag3 = current_lag3,
@@ -972,7 +1032,7 @@ generate_predictions_across_year <- function(start_week, end_week, weeks_ahead =
       )
       
       # Make prediction
-      prediction <- predict(post_wavg, newdata = recursive_data)
+      prediction <- predict(post, newdata = recursive_data)
       mean_prediction <- apply(prediction, 2, mean)
       li_prediction <- apply(prediction, 2, quantile, probs = 0.025)
       ui_prediction <- apply(prediction, 2, quantile, probs = 0.975)
@@ -1015,10 +1075,11 @@ generate_predictions_across_year <- function(start_week, end_week, weeks_ahead =
   
   return(all_predictions)
 }
+output_format = "gif"
 
 # 1. Generate predictions for all base weeks
-all_predictions <- generate_predictions_across_year(start_week = 4, end_week = 48) #COM CLIMA FICOU RUIM 
+all_predictions <- generate_predictions_across_year(start_week = 9, end_week = 9) #COM CLIMA FICOU RUIM 
 
 # 2. Create and save the animation
-create_prediction_animation_year(all_predictions, "dengue_predictions_2023.mp4")
+create_prediction_animation_year(all_predictions, output_format, glue("dengue_predictions_2023.{output_format}"))
 
