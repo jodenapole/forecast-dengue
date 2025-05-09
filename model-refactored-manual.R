@@ -1,5 +1,5 @@
-library("BART")
 library("MASS")
+library(stochtree)
 library(httr)
 library(jsonlite)
 library(mlr3)
@@ -11,6 +11,7 @@ library(glue)
 library(gganimate)
 library(gifski)
 library(transformr)
+library(gridExtra)
 
 # Get API key
 API_KEY <- Sys.getenv("MOSQLIMATE_API_KEY")
@@ -311,122 +312,6 @@ feature_creation <- function() {
   )
 }
 
-# Create animated visualization
-create_prediction_animation_year <- function(all_predictions, output_format, output_file) {
-  # Create a dataframe with all actual values for reference
-  full_actual <- data.frame(
-    week = 1:52,
-    actual = y_test$casos
-  )
-  
-  # Get the unique base weeks to use as animation frames
-  base_week <- unique(all_predictions$base_week)
-  
-  # Create the plot
-  p <- ggplot() +
-    # Plot full year of actual values
-    geom_line(data = full_actual, aes(x = week, y = actual), color = "black", alpha = 0.5) +
-    geom_point(data = full_actual, aes(x = week, y = actual), color = "black", alpha = 0.5, size = 1) +
-    
-    # Plot predictions for current base week
-    geom_ribbon(data = all_predictions, 
-                aes(x = prediction_week, ymin = lower_ci, ymax = upper_ci,
-                    group = base_week), 
-                fill = "red", alpha = 0.2) +
-    geom_line(data = all_predictions, 
-              aes(x = prediction_week, y = predicted, group = base_week), 
-              color = "red", size = 1) +
-    geom_point(data = all_predictions, 
-               aes(x = prediction_week, y = predicted, group = base_week), 
-               color = "red", size = 2) +
-    
-    # Highlight the base week with a vertical line
-    # geom_vline(aes(xintercept = base_week), color = "blue", linetype = "dashed") +
-    
-    # Add labels and theme
-    labs(title = "Dengue Case Predictions for 2023",
-         subtitle = "Base Week: {closest_state}",
-         x = "Week of Year",
-         y = "Number of Cases",
-         caption = "Actual (black) vs Predictions (red) | RMSE: {predictions_data[predictions_data$base_week == closest_state, 'rmse'][1]}") +
-    theme_bw() +
-    theme(plot.title = element_text(hjust = 0.5, face = "bold"),
-          plot.subtitle = element_text(hjust = 0.5)) +
-    
-    # Set up animation
-    transition_states(base_week, 
-                      transition_length = 2, 
-                      state_length = 3) +
-    ease_aes('cubic-in-out')
-  
-  # Render and save the animation
-  animated_plot <- animate(p, 
-                           nframes = length(base_week) * 5, 
-                           fps = 5, 
-                           width = 800, 
-                           height = 600,
-                           renderer = if(output_format == "gif") {
-                             gifski_renderer(output_file)
-                           } else if(output_format == "mp4") {
-                             av_renderer(output_file)
-                           }
-  )
-  
-  return(animated_plot)
-}
-
-# Plot full year
-plot_full_year <- function() {
-  p <- ggplot() +
-    # Plot the actual values as a black line
-    geom_line(data = data.frame(week = 1:52, actual = y_test$casos),
-              aes(x = week, y = actual), color = "black", size = 1) +
-    geom_point(data = data.frame(week = 1:52, actual = y_test$casos),
-               aes(x = week, y = actual), color = "black", size = 2) +
-    
-    # Add the predictions as red points with confidence intervals
-    geom_ribbon(data = all_predictions, 
-                aes(x = prediction_week, ymin = lower_ci, ymax = upper_ci), 
-                fill = "red", alpha = 0.2) +
-    geom_line(data = all_predictions, 
-              aes(x = prediction_week, y = predicted, group = base_week), 
-              color = "red", linetype = "dashed", size = 0.5) +
-    geom_point(data = all_predictions, 
-               aes(x = prediction_week, y = predicted), 
-               color = "red", size = 2) +
-    
-    # Add labels and formatting
-    labs(title = "Dengue Case Predictions vs Actual Values (2023)",
-         x = "Week of Year",
-         y = "Number of Cases",
-         caption = "Actual (black) vs Predictions (red with confidence intervals)") +
-    theme_minimal() +
-    theme(plot.title = element_text(hjust = 0.5, face = "bold"))
-  
-  plot(p)
-  
-}
-
-# CREATING IMPORTANT VARIABLES #
-climate_data <- api_calls(api_name = "climate")
-dengue_data_ordered <- api_calls(api_name = "dengue")
-x_train <- feature_creation() %>%
-  .$x_train_df
-y_train <- feature_creation() %>%
-  .$y_train
-y_test <- feature_creation() %>%
-  .$y_test
-
-
-# TRAINING MODEL
-set.seed(7)
-burn <- 13000
-nd <- 5000
-k_value <- 2
-power_value <- 2
-ntree_value <- 150L
-post <- wbart(x_train, y_train, nskip = burn, ndpost = nd, k=k_value, power = power_value, ntree = ntree_value )
-
 # Create a function to generate predictions for a range of base weeks
 generate_predictions_across_year <- function(start_week, end_week, weeks_ahead) {
   # Create a data frame to store all predictions
@@ -603,10 +488,15 @@ generate_predictions_across_year <- function(start_week, end_week, weeks_ahead) 
       )
       
       # Make prediction
-      prediction <- predict(post, newdata = recursive_data)
+      prediction_result <- predict(post, X = recursive_data)
+      
+      # Get posterior samples from prediction result
+      prediction <- prediction_result$y_hat
+ 
       mean_prediction <- apply(prediction, 2, mean)
       li_prediction <- apply(prediction, 2, quantile, probs = 0.025)
       ui_prediction <- apply(prediction, 2, quantile, probs = 0.975)
+      
       
       # Store predictions
       mean_predictions_2023[week] <- mean_prediction
@@ -647,12 +537,228 @@ generate_predictions_across_year <- function(start_week, end_week, weeks_ahead) 
   return(all_predictions)
 }
 
-# Generate predictions for all base weeks
-all_predictions <- generate_predictions_across_year(start_week = 29, end_week = 29, weeks_ahead = 4) 
-output_format = "mp4"
+# Create animated visualization
+create_prediction_animation_year <- function(all_predictions, output_format, output_file) {
+  # Create a dataframe with all actual values for reference
+  full_actual <- data.frame(
+    week = 1:52,
+    actual = y_test$casos
+  )
+  
+  # Get the unique base weeks to use as animation frames
+  base_week <- unique(all_predictions$base_week)
+  
+  # Create the plot
+  p <- ggplot() +
+    # Plot full year of actual values
+    geom_line(data = full_actual, aes(x = week, y = actual), color = "black", alpha = 0.5) +
+    geom_point(data = full_actual, aes(x = week, y = actual), color = "black", alpha = 0.5, size = 1) +
+    
+    # Plot predictions for current base week
+    geom_ribbon(data = all_predictions, 
+                aes(x = prediction_week, ymin = lower_ci, ymax = upper_ci,
+                    group = base_week), 
+                fill = "red", alpha = 0.2) +
+    geom_line(data = all_predictions, 
+              aes(x = prediction_week, y = predicted, group = base_week), 
+              color = "red", size = 1) +
+    geom_point(data = all_predictions, 
+               aes(x = prediction_week, y = predicted, group = base_week), 
+               color = "red", size = 2) +
+    
+    # Highlight the base week with a vertical line
+    # geom_vline(aes(xintercept = base_week), color = "blue", linetype = "dashed") +
+    
+    # Add labels and theme
+    labs(title = "Dengue Case Predictions for 2023",
+         subtitle = "Base Week: {closest_state}",
+         x = "Week of Year",
+         y = "Number of Cases",
+         caption = "Actual (black) vs Predictions (red) | RMSE: {predictions_data[predictions_data$base_week == closest_state, 'rmse'][1]}") +
+    theme_bw() +
+    theme(plot.title = element_text(hjust = 0.5, face = "bold"),
+          plot.subtitle = element_text(hjust = 0.5)) +
+    
+    # Set up animation
+    transition_states(base_week, 
+                      transition_length = 2, 
+                      state_length = 3) +
+    ease_aes('cubic-in-out')
+  
+  # Render and save the animation
+  animated_plot <- animate(p, 
+                           nframes = length(base_week) * 5, 
+                           fps = 5, 
+                           width = 800, 
+                           height = 600,
+                           renderer = if(output_format == "gif") {
+                             gifski_renderer(output_file)
+                           } else if(output_format == "mp4") {
+                             av_renderer(output_file)
+                           }
+  )
+  
+  return(animated_plot)
+}
 
-# Create and save the animation
-create_prediction_animation_year(all_predictions, output_format, glue("dengue_predictions_2023_comparison.{output_format}"))
+# Plot full year
+plot_full_year <- function() {
+  p <- ggplot() +
+    # Plot the actual values as a black line
+    geom_line(data = data.frame(week = 1:52, actual = y_test$casos),
+              aes(x = week, y = actual), color = "black", size = 1) +
+    geom_point(data = data.frame(week = 1:52, actual = y_test$casos),
+               aes(x = week, y = actual), color = "black", size = 2) +
+    
+    # Add the predictions as red points with confidence intervals
+    geom_ribbon(data = all_predictions, 
+                aes(x = prediction_week, ymin = lower_ci, ymax = upper_ci), 
+                fill = "red", alpha = 0.2) +
+    geom_line(data = all_predictions, 
+              aes(x = prediction_week, y = predicted, group = base_week), 
+              color = "red", linetype = "dashed", size = 0.5) +
+    geom_point(data = all_predictions, 
+               aes(x = prediction_week, y = predicted), 
+               color = "red", size = 2) +
+    
+    # Add labels and formatting
+    labs(title = "Dengue Case Predictions vs Actual Values (2023)",
+         x = "Week of Year",
+         y = "Number of Cases",
+         caption = "Actual (black) vs Predictions (red with confidence intervals)") +
+    theme_minimal() +
+    theme(plot.title = element_text(hjust = 0.5, face = "bold"))
+  
+  plot(p)
+  
+}
+
+assess_convergence <- function(bart_model, package = "stochtree", burn, num_mcmc) {
+
+  if (package == "stochtree") {
+    # Check if we have samples stored
+    
+    # 1. Trace plot of sigma^2
+      sigma2_samples <- bart_model$sigma2_global_samples
+      
+      p1 <- ggplot(data.frame(iteration = 1:length(sigma2_samples), 
+                              value = sigma2_samples), 
+                   aes(x = iteration, y = value)) +
+        geom_line() +
+        labs(title = "Trace Plot of Global Error Variance",
+             x = "Iteration (post burn-in)",
+             y = "Sigma²") +
+        theme_minimal()
+      
+      # 2. Check autocorrelation
+      acf_data <- acf(sigma2_samples, plot = FALSE)
+      p2 <- ggplot(data.frame(lag = acf_data$lag, acf = acf_data$acf), 
+                   aes(x = lag, y = acf)) +
+        geom_bar(stat = "identity") +
+        labs(title = "Autocorrelation of Sigma²",
+             x = "Lag",
+             y = "ACF") +
+        theme_minimal()
+      
+      # 3. Running mean plot to check stability
+      running_mean <- cumsum(sigma2_samples) / (1:length(sigma2_samples))
+      p3 <- ggplot(data.frame(iteration = 1:length(sigma2_samples), 
+                              mean = running_mean), 
+                   aes(x = iteration, y = mean)) +
+        geom_line() +
+        labs(title = "Running Mean of Sigma²",
+             x = "Iteration (post burn-in)",
+             y = "Cumulative Mean") +
+        theme_minimal()
+      
+      # Combine plots
+      grid.arrange(p1, p2, p3, ncol = 1)
+    
+  } 
+}
+
+# CREATING IMPORTANT VARIABLES #
+climate_data <- api_calls(api_name = "climate")
+dengue_data_ordered <- api_calls(api_name = "dengue")
+
+x_train <- feature_creation() %>%
+  .$x_train_df
+y_train <- feature_creation() %>%
+  .$y_train
+y_test <- feature_creation() %>%
+  .$y_test
+
+# Model Training
+bart_model <- function() {
+  # Create a stochtree BART model
+  set.seed(7)  # Set the same seed as before
+  burn <- 1000
+  nd <- 2000
+  ntree_value <- 200
+  
+  # Configure general parameters with more explicit control
+  general_params <- list(
+    random_seed = 7,
+    keep_burnin = FALSE,
+    verbose = TRUE,
+    standardize = TRUE,  # Standardize response variable (helps with prior calibration)
+    cutpoint_grid_size = 100  # Control cutpoint precision
+  )
+  
+  # Configure mean forest parameters to more closely match original BART behavior
+  # BART's k parameter controls the leaf node prior - trying to set appropriate values
+  mean_forest_params <- list(
+    num_trees = ntree_value,
+    alpha = 0.95,         # Tree structure prior - split probability at depth 0
+    beta = 2,             # Tree structure prior - how aggressively to penalize depth
+    min_samples_leaf = 1, # Allow smaller leaf nodes (original BART may allow this)
+    max_depth = 25,       # Allow deeper trees to capture trend patterns better
+    sigma2_leaf_init = 1.0/ntree_value,  # Initialize leaf variance similar to BART
+    sigma2_leaf_shape = 3,               # Shape parameter for leaf node prior
+    sigma2_leaf_scale = 0.5/ntree_value  # Scale parameter for leaf node prior
+  )
+  
+
+  # Try alternative configuration with variance forest for heteroskedasticity
+  # This might help capture the changing variance in dengue cases
+  variance_forest_params <- list(
+    num_trees = 20,  # Add a small variance forest to model heteroskedasticity
+    alpha = 0.95,
+    beta = 2,
+    min_samples_leaf = 5,
+    max_depth = 10
+  )
+  
+  # Train the BART model using stochtree with more careful calibration
+  post <- bart(
+    X_train = x_train,
+    y_train = y_train,
+    X_test = NULL,
+    num_burnin = burn,
+    num_mcmc = nd,
+    num_gfr = 0,  # Increase GFR iterations for better initial trees
+    general_params = general_params,
+    mean_forest_params = mean_forest_params,
+    variance_forest_params = variance_forest_params
+  )
+  
+  return (post)
+}
+
+post <- bart_model()
+
+# assess_convergence(post, package = "stochtree", burn = 1000, num_mcmc = 100)
+
+
+
+# Generate predictions for all base weeks
+all_predictions <- generate_predictions_across_year(start_week = 8, end_week = 8, weeks_ahead = 4) 
+
+
+# output_format = "mp4"
+# 
+# # Create and save the animation
+# create_prediction_animation_year(all_predictions, output_format, glue("branch_stochtree.{output_format}"))
 
 plot_full_year()
 
