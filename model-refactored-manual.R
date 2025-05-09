@@ -619,7 +619,7 @@ generate_predictions_across_year <- function(start_week, end_week, weeks_ahead) 
 all_predictions <- generate_predictions_across_year(start_week = 4, end_week = 48, weeks_ahead = 4) 
 output_format = "mp4"
 
-# Create and save the animation
+# Create the animation
 create_prediction_animation_year(all_predictions, output_format, glue("dengue_predictions_2023.{output_format}"))
 
 plot_full_year()
