@@ -1,0 +1,27 @@
+{
+    "id": "018B63B2",
+    "path": "~/forecast-dengue/model-refactored-manual.R",
+    "project_path": "model-refactored-manual.R",
+    "type": "r_source",
+    "hash": "3357362144",
+    "contents": "",
+    "dirty": false,
+    "created": 1746733078255.0,
+    "source_on_save": false,
+    "relative_order": 6,
+    "properties": {
+        "tempName": "Untitled1",
+        "source_window_id": "",
+        "Source": "Source",
+        "cursorPosition": "28,18",
+        "scrollLine": "12"
+    },
+    "folds": "20|33|80|0|\n83|32|408|0|\n85|60|107|2|\n110|51|132|2|\n135|73|149|2|\n140|42|146|4|\n152|55|190|2|\n232|58|250|2|\n262|57|274|2|\n411|27|421|0|\n424|81|652|0|\n655|91|716|0|\n719|30|748|0|\n751|28|792|0|\n",
+    "lastKnownWriteTime": 1746819443,
+    "encoding": "UTF-8",
+    "collab_server": "",
+    "source_window": "",
+    "last_content_update": 1746819443363,
+    "read_only": false,
+    "read_only_alternatives": []
+}
