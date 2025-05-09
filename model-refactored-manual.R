@@ -12,10 +12,8 @@ library(gganimate)
 library(gifski)
 library(transformr)
 
-API_KEY = 'jodenapole:27ab1f15-5cf9-4bae-a1e8-971baf371e9d'
-
-
-
+# Get API key
+API_KEY <- Sys.getenv("MOSQLIMATE_API_KEY")
 
 # FUNCTIONS #
 
