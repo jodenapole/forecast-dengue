@@ -12,7 +12,7 @@ library(gganimate)
 library(gifski)
 library(transformr)
 library(parallel)
-
+library(forecast)
 
 # Get API key
 API_KEY <- Sys.getenv("MOSQLIMATE_API_KEY")
@@ -22,25 +22,62 @@ API_KEY <- Sys.getenv("MOSQLIMATE_API_KEY")
 # Calling API for climate and dengue
 api_calls <- function(api_name) {
   if (api_name == "climate") {
-    # API CALL FOR CLIMATE 2019 - 2023
+    # API CALL FOR CLIMATE
     climate_weekly_api <- "https://api.mosqlimate.org/api/datastore/climate/weekly/"
-    climate_data <- data.frame()
-    params <- list(
-      page = 1,
-      per_page = 300,
-      start = 201901,
-      end = 202352,
-      geocode = 3304557
-      # uf = UF,
-    )
-    headers <- add_headers(
-      `X-UID-Key` = API_KEY
-    )
-    resp <- GET(climate_weekly_api, query = params, headers)
-    json_content <- fromJSON(content(resp, "text"))
-    items <- json_content$items
-    climate_data <- rbind(climate_data, items)
-    climate_data$week_of_year <- as.numeric(substr(climate_data$epiweek, 5, 6))
+    all_items <- list()  # Store items in a list for more efficient collection
+    total_pages_estimate <- 500
+    
+    for (pagenumber in 1:total_pages_estimate) {
+      params <- list(
+        page = pagenumber,
+        per_page = 300,
+        start = 201101,  # Extended start date from 2011
+        end = 202352,
+        geocode = 3304557
+      )
+      
+      headers <- add_headers(
+        `X-UID-Key` = API_KEY
+      )
+      
+      resp <- GET(climate_weekly_api, query = params, headers)
+      
+      # Handle HTTP errors
+      if (http_error(resp)) {
+        message(paste("Error:", status_code(resp)))
+        break
+      }
+      
+      # Safe JSON parsing
+      tryCatch({
+        json_content <- fromJSON(content(resp, "text"))
+        items <- json_content$items
+        
+        # Store this page's items
+        if (length(items) > 0 && nrow(items) > 0) {
+          all_items[[pagenumber]] <- items
+          message(sprintf("Page %d: Retrieved %d items", pagenumber, nrow(items)))
+        }
+        
+        # Break if we got fewer items than requested (likely the last page)
+        if (length(items) == 0 || nrow(items) < 300) {
+          message("Reached last page of data")
+          break
+        }
+        
+      }, error = function(e) {
+        message(paste("Error parsing response:", e$message))
+        break
+      })
+    }
+    
+    # Combine all items into a single data frame
+    climate_data <- do.call(rbind, all_items)
+    
+    # Add week_of_year column once after all data is collected
+    if (nrow(climate_data) > 0) {
+      climate_data$week_of_year <- as.numeric(substr(climate_data$epiweek, 5, 6))
+    }
     
     api_response <- climate_data
   }
@@ -50,7 +87,7 @@ api_calls <- function(api_name) {
     # API CALL FOR DENGUE CASES 2019 - 2023
     dengue_data <- data.frame()
     dengue_api <- "https://api.mosqlimate.org/api/datastore/infodengue/?disease=dengue"
-    date <- paste0("&start=2018-12-30&end=2023-12-30")
+    date <- paste0("&start=2010-12-30&end=2023-12-30")
     geocode <- paste0("&geocode=3304557")
     total_pages_estimate <- 500
     for (pagenumber in 1:total_pages_estimate) { # Loop until there are no more pages
@@ -336,18 +373,18 @@ feature_creation <- function() {
     dengue_data_train$casos_lag2,
     dengue_data_train$casos_lag3,
     dengue_data_train$casos_lag4,
-    # dengue_data_train$temp_med_lag1,
-    # dengue_data_train$temp_med_lag2,
-    # dengue_data_train$temp_med_lag3,
-    # dengue_data_train$temp_med_lag4,
-    # dengue_data_train$umid_med_lag1,
-    # dengue_data_train$umid_med_lag2,
-    # dengue_data_train$umid_med_lag3,
-    # dengue_data_train$umid_med_lag4,
-    # dengue_data_train$temp_competence_optimality,
-    # dengue_data_train$humidity_risk,
+    dengue_data_train$temp_med_lag1,
+    dengue_data_train$temp_med_lag2,
+    dengue_data_train$temp_med_lag3,
+    dengue_data_train$temp_med_lag4,
+    dengue_data_train$umid_med_lag1,
+    dengue_data_train$umid_med_lag2,
+    dengue_data_train$umid_med_lag3,
+    dengue_data_train$umid_med_lag4,
+    dengue_data_train$temp_competence_optimality,
+    dengue_data_train$humidity_risk,
+    dengue_data_train$temp_competence_humidty_risk,
     # dengue_data_train$optimal_conditions,
-    # dengue_data_train$temp_competence_humidty_risk,
     dengue_data_train$sin_year,
     dengue_data_train$cos_year,
     dengue_data_train$casoslag1_mov_sd,
@@ -363,18 +400,18 @@ feature_creation <- function() {
     "casos_lag2",
     "casos_lag3",
     "casos_lag4",
-    # "temp_med_lag1",
-    # "temp_med_lag2",
-    # "temp_med_lag3",
-    # "temp_med_lag4",
-    # "umid_med_lag1",
-    # "umid_med_lag2",
-    # "umid_med_lag3",
-    # "umid_med_lag4",
-    # "temp_competence_optimality",
+    "temp_med_lag1",
+    "temp_med_lag2",
+    "temp_med_lag3",
+    "temp_med_lag4",
+    "umid_med_lag1",
+    "umid_med_lag2",
+    "umid_med_lag3",
+    "umid_med_lag4",
+    "temp_competence_optimality",
+    "humidity_risk",
+    "temp_competence_humidty_risk",
     # "optimal_conditions",
-    # "humidity_risk",
-    # "temp_competence_humidty_risk",
     "sin_year",
     "cos_year",
     "casoslag1_mov_sd",
@@ -383,9 +420,8 @@ feature_creation <- function() {
     "decay"
   )
   
-  y_train <- cbind(
-    dengue_data_train$casos
-  )
+  lambda <- BoxCox.lambda(dengue_data_train$casos)
+  y_train <- cbind(BoxCox(dengue_data_train$casos, lambda))
   
   y_test <- cbind(
     dengue_data_test$casos,
@@ -413,7 +449,8 @@ feature_creation <- function() {
     list(
       x_train_df = x_train_df,
       y_train = y_train,
-      y_test = y_test
+      y_test = y_test,
+      lambda = lambda
     )
   )
 }
@@ -426,7 +463,7 @@ bart_model <- function () {
   k_value <- 2
   power_value <- 2
   ntree_value <- 150L
-  post <- wbart(x_train, y_train, nskip = burn, ndpost = nd, k=k_value, power = power_value, ntree = ntree_value)
+  post <- wbart(x_train, y_train, nskip = burn, ndpost = nd, k=k_value, power = power_value, ntree = ntree_value, sparse = TRUE)
   
   return (post)
 }
@@ -603,17 +640,17 @@ generate_predictions_across_year <- function(start_week, end_week, weeks_ahead) 
         casos_lag2 = current_lag2,
         casos_lag3 = current_lag3,
         casos_lag4 = current_lag4,
-        # temp_med_lag1 = current_temp_med_lag1,
-        # temp_med_lag2 = current_temp_med_lag2,
-        # temp_med_lag3 = current_temp_med_lag3,
-        # temp_med_lag4 = current_temp_med_lag4,
-        # umid_med_lag1 = current_umid_med_lag1,
-        # umid_med_lag2 = current_umid_med_lag2,
-        # umid_med_lag3 = current_umid_med_lag3,
-        # umid_med_lag4 = current_umid_med_lag4,
-        # temp_competence_optimality = current_temp_competence_optimality,
-        # humidity_risk = current_humidity_risk,
-        # temp_competence_humidty_risk = current_temp_competence_humidty_risk,
+        temp_med_lag1 = current_temp_med_lag1,
+        temp_med_lag2 = current_temp_med_lag2,
+        temp_med_lag3 = current_temp_med_lag3,
+        temp_med_lag4 = current_temp_med_lag4,
+        umid_med_lag1 = current_umid_med_lag1,
+        umid_med_lag2 = current_umid_med_lag2,
+        umid_med_lag3 = current_umid_med_lag3,
+        umid_med_lag4 = current_umid_med_lag4,
+        temp_competence_optimality = current_temp_competence_optimality,
+        humidity_risk = current_humidity_risk,
+        temp_competence_humidty_risk = current_temp_competence_humidty_risk,
         # optimal_conditions = current_optimal_conditions,
         sin_year = sin(2 * pi * week_number/52),
         cos_year = cos(2 * pi * week_number/52),
@@ -625,10 +662,10 @@ generate_predictions_across_year <- function(start_week, end_week, weeks_ahead) 
       
       # Make prediction
       prediction <- predict(post, newdata = recursive_data)
-      mean_prediction <- apply(prediction, 2, mean)
-      median_prediction <- apply(prediction, 2, median)
-      li_prediction <- apply(prediction, 2, quantile, probs = 0.025)
-      ui_prediction <- apply(prediction, 2, quantile, probs = 0.975)
+      median_prediction <- InvBoxCox(apply(prediction, 2, median), lambda)
+      mean_prediction <- InvBoxCox(apply(prediction, 2, mean), lambda)
+      li_prediction <- InvBoxCox(apply(prediction, 2, quantile, probs = 0.025), lambda)
+      ui_prediction <- InvBoxCox(apply(prediction, 2, quantile, probs = 0.975), lambda)
 
       
       # Store predictions
@@ -688,7 +725,7 @@ generate_predictions_across_year <- function(start_week, end_week, weeks_ahead) 
       
       all_predictions <- rbind(all_predictions, new_row)
     }
-    
+    025
     # Print progress
     cat(sprintf("Processed base week %d/%d\r", week_base, end_week))
   }
@@ -1170,6 +1207,8 @@ y_train <- feature_creation() %>%
   .$y_train
 y_test <- feature_creation() %>%
   .$y_test
+lambda <- feature_creation() %>%
+  .$lambda
 
 post <- bart_model()
 
@@ -1177,8 +1216,8 @@ post <- bart_model()
 all_predictions <- generate_predictions_across_year(start_week = 4, end_week = 48, weeks_ahead = 4) 
 
 # Create and save the animation
-# output_format = "mp4"
-# create_prediction_animation_year(all_predictions, output_format, glue("dengue_predictions_2023_comparison_test.{output_format}"))
+output_format = "mp4"
+create_prediction_animation_year(all_predictions, output_format, glue("BART_2011_tempumid_alllags_tempcomp_humidrisk_andbothcombined_boxcoxtransform_sparse.{output_format}"))
 
 
 # Plots to analysis:
@@ -1191,7 +1230,7 @@ plot_var_imp()
 # Store the metrics with a descriptive name
 model_metrics <- store_model_metrics(
   all_predictions, 
-  model_name = glue("BART"), 
+  model_name = glue("BART_2011_tempumid_alllags_tempcomp_humidrisk_andbothcombined_boxcoxtransform_sparse"), 
   save_path = getwd()
 )
 print(model_metrics$horizon_metrics)
