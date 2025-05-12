@@ -973,6 +973,19 @@ plot_calibration <- function(all_predictions, model_name = "BART") {
   return(p)
 }
 
+horizon_metrics <- function() {
+  horizon_metrics <- all_predictions %>%
+    group_by(horizon) %>%
+    summarize(
+      mean_ae = mean(ae),
+      mean_is = mean(is_score),
+      mean_wis = mean(wis_score),
+      coverage_95 = mean(actual >= lower_ci & actual <= upper_ci)
+    )
+  
+  print(horizon_metrics)
+}
+
 # CREATING IMPORTANT VARIABLES #
 climate_data <- api_calls(api_name = "climate")
 dengue_data_ordered <- api_calls(api_name = "dengue")
@@ -987,30 +1000,21 @@ y_test <- feature_creation() %>%
 post <- bart_model()
 
 # Generate predictions for all base weeks
-all_predictions <- generate_predictions_across_year(start_week = 4, end_week = 48, weeks_ahead = 4) 
+all_predictions <- generate_predictions_across_year(start_week = 4, end_week = 4, weeks_ahead = 4) 
 
 # Create and save the animation
 output_format = "mp4"
 create_prediction_animation_year(all_predictions, output_format, glue("dengue_predictions_2023_comparison.{output_format}"))
 
+# Metrics
+horizon_metrics()
+
+# Plots to analysis:
 plot_full_year()
 plot_var_imp()
-
-# And add these plots to your analysis:
 plot_decomposed_is(all_predictions)
 plot_pit_histogram(all_predictions)
 plot_calibration(all_predictions)
 
-# You can also analyze metrics by forecast horizon:
-horizon_metrics <- all_predictions %>%
-  group_by(horizon) %>%
-  summarize(
-    mean_ae = mean(ae),
-    mean_is = mean(is_score),
-    mean_wis = mean(wis_score),
-    coverage_95 = mean(actual >= lower_ci & actual <= upper_ci)
-  )
-
-print(horizon_metrics)
 
 
