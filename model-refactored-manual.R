@@ -11,6 +11,8 @@ library(glue)
 library(gganimate)
 library(gifski)
 library(transformr)
+library(parallel)
+
 
 # Get API key
 API_KEY <- Sys.getenv("MOSQLIMATE_API_KEY")
@@ -307,11 +309,11 @@ feature_creation <- function() {
   
   # Optimal temperature window
   dengue_data_ordered$temp_competence_optimality <- 
-    create_temp_competence_optimality(climate_data$temp_med_avg)
+    create_temp_competence_optimality(dengue_data_ordered$temp_med_lag3)
   
   # Optimal humidity window
   dengue_data_ordered$humidity_risk <- 
-    create_humidity_risk(climate_data$umid_med_avg)
+    create_humidity_risk(dengue_data_ordered$umid_med_lag3)
   
   # Flag for when humidity and temperature are optimal together
   dengue_data_ordered$optimal_conditions <- 
@@ -334,17 +336,17 @@ feature_creation <- function() {
     dengue_data_train$casos_lag2,
     dengue_data_train$casos_lag3,
     dengue_data_train$casos_lag4,
-    dengue_data_train$temp_med_lag1,
+    # dengue_data_train$temp_med_lag1,
     # dengue_data_train$temp_med_lag2,
     # dengue_data_train$temp_med_lag3,
     # dengue_data_train$temp_med_lag4,
-    dengue_data_train$umid_med_lag1,
+    # dengue_data_train$umid_med_lag1,
     # dengue_data_train$umid_med_lag2,
     # dengue_data_train$umid_med_lag3,
     # dengue_data_train$umid_med_lag4,
     # dengue_data_train$temp_competence_optimality,
     # dengue_data_train$humidity_risk,
-    # # dengue_data_train$optimal_conditions,
+    # dengue_data_train$optimal_conditions,
     # dengue_data_train$temp_competence_humidty_risk,
     dengue_data_train$sin_year,
     dengue_data_train$cos_year,
@@ -361,8 +363,14 @@ feature_creation <- function() {
     "casos_lag2",
     "casos_lag3",
     "casos_lag4",
-    "temp_med_lag1",
-    "umid_med_lag1",
+    # "temp_med_lag1",
+    # "temp_med_lag2",
+    # "temp_med_lag3",
+    # "temp_med_lag4",
+    # "umid_med_lag1",
+    # "umid_med_lag2",
+    # "umid_med_lag3",
+    # "umid_med_lag4",
     # "temp_competence_optimality",
     # "optimal_conditions",
     # "humidity_risk",
@@ -385,6 +393,7 @@ feature_creation <- function() {
     dengue_data_test$temp_competence_optimality,
     dengue_data_test$humidity_risk,
     dengue_data_test$temp_competence_humidty_risk
+    # dengue_data_test$optimal_conditions
   )
   
   y_test <- as.data.frame(y_test) # only used for reference, not to train or test.
@@ -395,6 +404,7 @@ feature_creation <- function() {
     "temp_competence_optimality",
     "humidity_risk",
     "temp_competence_humidty_risk"
+    # "optimal_conditions"
   )
   
   y_test$week_number <- 1:52
@@ -416,7 +426,7 @@ bart_model <- function () {
   k_value <- 2
   power_value <- 2
   ntree_value <- 150L
-  post <- wbart(x_train, y_train, nskip = burn, ndpost = nd, k=k_value, power = power_value, ntree = ntree_value )
+  post <- wbart(x_train, y_train, nskip = burn, ndpost = nd, k=k_value, power = power_value, ntree = ntree_value)
   
   return (post)
 }
@@ -457,6 +467,7 @@ generate_predictions_across_year <- function(start_week, end_week, weeks_ahead) 
         current_temp_competence_optimality <- y_test$temp_competence_optimality[week_base]
         current_humidity_risk <- y_test$humidity_risk[week_base]
         current_temp_competence_humidty_risk <- y_test$temp_competence_humidty_risk[week_base]
+        current_optimal_conditions <- y_test$optimal_conditions[week_base]
         current_lag1 <- v1
         current_lag2 <- v2
         current_lag3 <- v3
@@ -484,6 +495,7 @@ generate_predictions_across_year <- function(start_week, end_week, weeks_ahead) 
         current_temp_competence_optimality <- y_test$temp_competence_optimality[week_base]
         current_humidity_risk <- y_test$humidity_risk[week_base]
         current_temp_competence_humidty_risk <- y_test$temp_competence_humidty_risk[week_base]
+        current_optimal_conditions <- y_test$optimal_conditions[week_base]
         current_lag1 <- mean_predictions_2023[1]
         current_lag2 <- v1
         current_lag3 <- v2
@@ -511,6 +523,7 @@ generate_predictions_across_year <- function(start_week, end_week, weeks_ahead) 
         current_temp_competence_optimality <- y_test$temp_competence_optimality[week_base]
         current_humidity_risk <- y_test$humidity_risk[week_base]
         current_temp_competence_humidty_risk <- y_test$temp_competence_humidty_risk[week_base]
+        current_optimal_conditions <- y_test$optimal_conditions[week_base]
         current_lag1 <- mean_predictions_2023[2]
         current_lag2 <- mean_predictions_2023[1]
         current_lag3 <- v1
@@ -538,6 +551,7 @@ generate_predictions_across_year <- function(start_week, end_week, weeks_ahead) 
         current_temp_competence_optimality <- y_test$temp_competence_optimality[week_base]
         current_humidity_risk <- y_test$humidity_risk[week_base]
         current_temp_competence_humidty_risk <- y_test$temp_competence_humidty_risk[week_base]
+        current_optimal_conditions <- y_test$optimal_conditions[week_base]
         current_lag1 <- mean_predictions_2023[3]
         current_lag2 <- mean_predictions_2023[2]
         current_lag3 <- mean_predictions_2023[1]
@@ -565,6 +579,7 @@ generate_predictions_across_year <- function(start_week, end_week, weeks_ahead) 
         current_temp_competence_optimality <- y_test$temp_competence_optimality[week_base]
         current_humidity_risk <- y_test$humidity_risk[week_base]
         current_temp_competence_humidty_risk <- y_test$temp_competence_humidty_risk[week_base]
+        current_optimal_conditions <- y_test$optimal_conditions[week_base]
         current_lag1 <- mean_predictions_2023[4]
         current_lag2 <- mean_predictions_2023[3]
         current_lag3 <- mean_predictions_2023[2]
@@ -588,17 +603,18 @@ generate_predictions_across_year <- function(start_week, end_week, weeks_ahead) 
         casos_lag2 = current_lag2,
         casos_lag3 = current_lag3,
         casos_lag4 = current_lag4,
-        temp_med_lag1 = current_temp_med_lag1,
+        # temp_med_lag1 = current_temp_med_lag1,
         # temp_med_lag2 = current_temp_med_lag2,
         # temp_med_lag3 = current_temp_med_lag3,
         # temp_med_lag4 = current_temp_med_lag4,
-        umid_med_lag1 = current_umid_med_lag1,
+        # umid_med_lag1 = current_umid_med_lag1,
         # umid_med_lag2 = current_umid_med_lag2,
         # umid_med_lag3 = current_umid_med_lag3,
         # umid_med_lag4 = current_umid_med_lag4,
         # temp_competence_optimality = current_temp_competence_optimality,
         # humidity_risk = current_humidity_risk,
         # temp_competence_humidty_risk = current_temp_competence_humidty_risk,
+        # optimal_conditions = current_optimal_conditions,
         sin_year = sin(2 * pi * week_number/52),
         cos_year = cos(2 * pi * week_number/52),
         casoslag1_mov_sd = mov_sd,
@@ -792,16 +808,17 @@ plot_var_imp <- function() {
     "casos_lag3",
     "casos_lag4",
     "temp_med_lag1",
-    # "temp_med_lag2",
-    # "temp_med_lag3",
-    # "temp_med_lag4",
+    "temp_med_lag2",
+    "temp_med_lag3",
+    "temp_med_lag4",
     "umid_med_lag1",
-    # "umid_med_lag2",
-    # "umid_med_lag3",
-    # "umid_med_lag4",
-    # "temp_competence_optimality",
-    # "humidity_risk",
-    # "temp_competence_humidty_risk",
+    "umid_med_lag2",
+    "umid_med_lag3",
+    "umid_med_lag4",
+    "temp_competence_optimality",
+    "humidity_risk",
+    "temp_competence_humidty_risk",
+    # "optimal_conditions",
     "sin_year",
     "cos_year",
     "casoslag1_mov_sd",
@@ -983,8 +1000,165 @@ horizon_metrics <- function() {
       coverage_95 = mean(actual >= lower_ci & actual <= upper_ci)
     )
   
-  print(horizon_metrics)
+  return (horizon_metrics)
 }
+
+# Function to calculate, store, and retrieve model evaluation metrics
+store_model_metrics <- function(all_predictions, model_name, save_path) {
+  # If model_name is not provided, use a timestamp
+  if (is.null(model_name)) {
+    model_name <- format(Sys.time(), "model_%Y%m%d_%H%M%S")
+  }
+  
+  # If save_path is not provided, use the current working directory
+  if (is.null(save_path)) {
+    save_path <- getwd()
+  }
+  
+  # Calculate metrics by horizon
+  horizon_metrics <- all_predictions %>%
+    group_by(horizon) %>%
+    summarize(
+      mean_ae = mean(ae, na.rm = TRUE),
+      mean_is = mean(is_score, na.rm = TRUE),
+      mean_wis = mean(wis_score, na.rm = TRUE),
+      coverage_95 = mean(actual >= lower_ci & actual <= upper_ci, na.rm = TRUE),
+      rmse = sqrt(mean((actual - predicted)^2, na.rm = TRUE)),
+      mae = mean(abs(actual - predicted), na.rm = TRUE),
+      mape = mean(abs((actual - predicted) / actual) * 100, na.rm = TRUE)
+    )
+  
+  # Calculate overall metrics
+  overall_metrics <- all_predictions %>%
+    summarize(
+      mean_ae = mean(ae, na.rm = TRUE),
+      mean_is = mean(is_score, na.rm = TRUE),
+      mean_wis = mean(wis_score, na.rm = TRUE),
+      coverage_95 = mean(actual >= lower_ci & actual <= upper_ci, na.rm = TRUE),
+      rmse = sqrt(mean((actual - predicted)^2, na.rm = TRUE)),
+      mae = mean(abs(actual - predicted), na.rm = TRUE),
+      mape = mean(abs((actual - predicted) / actual) * 100, na.rm = TRUE)
+    )
+  
+  # Add model name and horizon information
+  horizon_metrics$model_name <- model_name
+  overall_metrics$model_name <- model_name
+  overall_metrics$horizon <- "overall"
+  
+  # Combine horizon-specific and overall metrics
+  all_metrics <- horizon_metrics
+  
+  # Create metrics directory if it doesn't exist
+  metrics_dir <- file.path(save_path, "model_metrics")
+  if (!dir.exists(metrics_dir)) {
+    dir.create(metrics_dir, recursive = TRUE)
+  }
+  
+  # File paths for metrics
+  horizon_file <- file.path(metrics_dir, paste0(model_name, "_horizon_metrics.csv"))
+  overall_file <- file.path(metrics_dir, paste0(model_name, "_overall_metrics.csv"))
+  combined_file <- file.path(metrics_dir, paste0(model_name, "_all_metrics.csv"))
+  all_models_file <- file.path(metrics_dir, "all_models_comparison.csv")
+  
+  # Save individual metrics files
+  write.csv(horizon_metrics, horizon_file, row.names = FALSE)
+  # write.csv(overall_metrics, overall_file, row.names = FALSE)
+  # write.csv(all_metrics, combined_file, row.names = FALSE)
+  
+  # Update the all models comparison file
+  # write.csv(all_metrics, all_models_file, row.names = FALSE)
+  
+  # Return the metrics as a list
+  return(list(
+    horizon_metrics = horizon_metrics,
+    overall_metrics = overall_metrics,
+    all_metrics = all_metrics,
+    files = list(
+      horizon_file = horizon_file,
+      overall_file = overall_file,
+      combined_file = combined_file,
+      all_models_file = all_models_file
+    )
+  ))
+}
+
+# Function to visualize detailed metrics for a specific model
+visualize_model_metrics <- function(model_name, metrics_dir = NULL) {
+  # Default to current working directory if not specified
+  if (is.null(metrics_dir)) {
+    metrics_dir <- file.path(getwd(), "model_metrics")
+  }
+  
+  # Load the model's metrics
+  model_file <- file.path(metrics_dir, paste0(model_name, "_all_metrics.csv"))
+  
+  if (!file.exists(model_file)) {
+    stop(paste("Metrics for model", model_name, "not found."))
+  }
+  
+  model_metrics <- read.csv(model_file)
+  
+  # Filter out the overall row for horizon plots
+  horizon_metrics <- model_metrics %>%
+    filter(horizon != "overall")
+  
+  # Create plots
+  
+  # 1. Accuracy metrics by horizon
+  p1 <- ggplot(horizon_metrics, aes(x = horizon)) +
+    geom_line(aes(y = mean_ae, color = "Mean Absolute Error")) +
+    geom_line(aes(y = rmse, color = "RMSE")) +
+    labs(
+      title = paste("Accuracy Metrics by Horizon -", model_name),
+      x = "Forecast Horizon (weeks)",
+      y = "Error",
+      color = "Metric"
+    ) +
+    theme_minimal()
+  
+  # 2. IS/WIS components by horizon
+  # Reshape data for stacked bar chart
+  is_components <- horizon_metrics %>%
+    select(horizon, mean_is, model_name) %>%
+    mutate(metric_type = "Interval Score")
+  
+  wis_components <- horizon_metrics %>%
+    select(horizon, mean_wis, model_name) %>%
+    mutate(metric_type = "Weighted Interval Score")
+  
+  p2 <- ggplot() +
+    geom_line(data = is_components, aes(x = horizon, y = mean_is, color = "Interval Score")) +
+    geom_line(data = wis_components, aes(x = horizon, y = mean_wis, color = "Weighted Interval Score")) +
+    labs(
+      title = paste("Interval Scores by Horizon -", model_name),
+      x = "Forecast Horizon (weeks)",
+      y = "Score",
+      color = "Metric"
+    ) +
+    theme_minimal()
+  
+  # 3. Coverage by horizon
+  p3 <- ggplot(horizon_metrics, aes(x = horizon, y = coverage_95)) +
+    geom_line() +
+    geom_point() +
+    geom_hline(yintercept = 0.95, linetype = "dashed", color = "red") +
+    labs(
+      title = paste("95% Interval Coverage by Horizon -", model_name),
+      x = "Forecast Horizon (weeks)",
+      y = "Coverage",
+      caption = "Red dashed line indicates ideal 95% coverage"
+    ) +
+    theme_minimal()
+  
+  # Return all plots
+  return(list(
+    accuracy_plot = p1,
+    interval_scores_plot = p2,
+    coverage_plot = p3,
+    metrics = model_metrics
+  ))
+}
+
 
 # CREATING IMPORTANT VARIABLES #
 climate_data <- api_calls(api_name = "climate")
@@ -1000,21 +1174,29 @@ y_test <- feature_creation() %>%
 post <- bart_model()
 
 # Generate predictions for all base weeks
-all_predictions <- generate_predictions_across_year(start_week = 4, end_week = 4, weeks_ahead = 4) 
+all_predictions <- generate_predictions_across_year(start_week = 4, end_week = 48, weeks_ahead = 4) 
 
 # Create and save the animation
-output_format = "mp4"
-create_prediction_animation_year(all_predictions, output_format, glue("dengue_predictions_2023_comparison.{output_format}"))
+# output_format = "mp4"
+# create_prediction_animation_year(all_predictions, output_format, glue("dengue_predictions_2023_comparison_test.{output_format}"))
 
-# Metrics
-horizon_metrics()
 
 # Plots to analysis:
 plot_full_year()
 plot_var_imp()
-plot_decomposed_is(all_predictions)
-plot_pit_histogram(all_predictions)
-plot_calibration(all_predictions)
+# plot_decomposed_is(all_predictions)
+# plot_pit_histogram(all_predictions)
+# plot_calibration(all_predictions)
+
+# Store the metrics with a descriptive name
+model_metrics <- store_model_metrics(
+  all_predictions, 
+  model_name = glue("BART"), 
+  save_path = getwd()
+)
+print(model_metrics$horizon_metrics)
+
+
 
 
 
