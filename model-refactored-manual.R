@@ -12,7 +12,7 @@ library(gganimate)
 library(gifski)
 library(transformr)
 library(parallel)
-
+library(tidyr)
 
 # Get API key
 API_KEY <- Sys.getenv("MOSQLIMATE_API_KEY")
@@ -624,7 +624,15 @@ generate_predictions_across_year <- function(start_week, end_week, weeks_ahead) 
       )
       
       # Make prediction
+      quantile_levels <- c(0.01, 0.025, 0.05, 0.1, 0.2, 0.25, 0.3, 0.4, 0.5, 
+                           0.6, 0.7, 0.75, 0.8, 0.9, 0.95, 0.975, 0.99)
       prediction <- predict(post, newdata = recursive_data)
+      
+      quantile_predictions <- lapply(quantile_levels, function(q) {
+        apply(prediction, 2, quantile, probs = q)
+      })
+      quantiles = setNames(quantile_predictions, paste0("q", quantile_levels * 100))
+      
       mean_prediction <- apply(prediction, 2, mean)
       median_prediction <- apply(prediction, 2, median)
       li_prediction <- apply(prediction, 2, quantile, probs = 0.025)
@@ -649,22 +657,44 @@ generate_predictions_across_year <- function(start_week, end_week, weeks_ahead) 
       # Actual value
       actual <- y_test$casos[prediction_week]
       
-      # Calculate interval score for 95% CI
-      is_95 <- calculate_interval_score(
-        li_predictions_2023[i],
-        ui_predictions_2023[i],
+      
+      
+      # Calculate interval scores for standard intervals
+      # 50% interval
+      is_50 <- calculate_interval_score(
+        quantiles$q25[1],
+        quantiles$q75[1],
         actual,
-        0.05  # alpha = 0.05 for 95% CI
+        0.5
       )
       
-      # For WIS, we need multiple intervals, but only have 95% CI in this example
-      # This is a simplified version - in practice, you'd use more intervals
-      wis <- calculate_wis(
-        c(0.05), # just using 95% CI for simplicity
-        c(mean_predictions_2023[i], li_predictions_2023[i]),
-        c(mean_predictions_2023[i], ui_predictions_2023[i]),
-        actual
+      # 80% interval
+      is_80 <- calculate_interval_score(
+        quantiles$q10[1],
+        quantiles$q90[1],
+        actual,
+        0.2
       )
+      
+      # 90% interval
+      is_90 <- calculate_interval_score(
+        quantiles$q5[1],
+        quantiles$q95[1],
+        actual,
+        0.1
+      )
+      
+      # 95% interval
+      is_95 <- calculate_interval_score(
+        quantiles$q2.5[1],
+        quantiles$q97.5[1],
+        actual,
+        0.05
+      )
+      
+      # Calculate proper WIS
+      wis_result <- calculate_proper_wis(quantiles, actual)
+
       
       new_row <- data.frame(
         base_week = week_base,
@@ -674,16 +704,61 @@ generate_predictions_across_year <- function(start_week, end_week, weeks_ahead) 
         predicted_median = median_prediction,
         lower_ci = li_predictions_2023[i],
         upper_ci = ui_predictions_2023[i],
+        
+        # Store all quantiles for reference
+        q1 = quantiles$q1[1],
+        q2.5 = quantiles$q2.5[1],
+        q5 = quantiles$q5[1],
+        q10 = quantiles$q10[1],
+        q25 = quantiles$q25[1],
+        q50 = median_prediction,
+        q75 = quantiles$q75[1],
+        q90 = quantiles$q90[1],
+        q95 = quantiles$q95[1],
+        q97.5 = quantiles$q97.5[1],
+        q99 = quantiles$q99[1],
+        
         horizon = i,
         ae = abs(actual - mean_predictions_2023[i]),
-        is_score = is_95$score,
-        is_width = is_95$width,
-        is_under = is_95$under_penalty,
-        is_over = is_95$over_penalty,
-        wis_score = wis$score,
-        wis_width = wis$width,
-        wis_under = wis$under_penalty,
-        wis_over = wis$over_penalty
+
+        # Store interval scores
+        is_50_score = is_50$score,
+        is_50_width = is_50$width,
+        is_50_under = is_50$under_penalty,
+        is_50_over = is_50$over_penalty,
+        
+        is_80_score = is_80$score,
+        is_80_width = is_80$width,
+        is_80_under = is_80$under_penalty,
+        is_80_over = is_80$over_penalty,
+        
+        is_90_score = is_90$score,
+        is_90_width = is_90$width,
+        is_90_under = is_90$under_penalty,
+        is_90_over = is_90$over_penalty,
+        
+        is_95_score = is_95$score,
+        is_95_width = is_95$width,
+        is_95_under = is_95$under_penalty,
+        is_95_over = is_95$over_penalty,
+        
+        # Store WIS
+        wis_score = wis_result$score,
+        wis_ae = wis_result$absolute_error,
+        wis_width = wis_result$width,
+        wis_under = wis_result$under_penalty,
+        wis_over = wis_result$over_penalty,
+        
+        # Coverage metrics
+        coverage_50 = as.numeric(actual >= quantiles$q25[i] & 
+                                   actual <= quantiles$q75[i]),
+        coverage_80 = as.numeric(actual >= quantiles$q10[i] & 
+                                   actual <= quantiles$q90[i]),
+        coverage_90 = as.numeric(actual >= quantiles$q5[i] & 
+                                   actual <= quantiles$q95[i]),
+        coverage_95 = as.numeric(actual >= quantiles$q2.5[i] & 
+                                   actual <= quantiles$q97.5[i])
+        
       )
       
       all_predictions <- rbind(all_predictions, new_row)
@@ -693,7 +768,7 @@ generate_predictions_across_year <- function(start_week, end_week, weeks_ahead) 
     cat(sprintf("Processed base week %d/%d\r", week_base, end_week))
   }
   # Calculate PIT values
-  all_predictions$pit <- calculate_pit(all_predictions)
+  all_predictions$pit <- calculate_pit_enhanced(all_predictions)
   
   return(all_predictions)
 }
@@ -862,100 +937,251 @@ calculate_interval_score <- function(lower, upper, actual, alpha) {
 }
 
 # Calculates the weighted interval score using multiple prediction intervals
-calculate_wis <- function(prediction_levels, lower_bounds, upper_bounds, actual) {
-  n_intervals <- length(prediction_levels)
-  weights <- prediction_levels / 2  # as per the paper recommendation
+calculate_proper_wis <- function(quantile_predictions, actual) {
+  
+  # Extract quantiles and levels
+  quantile_names <- names(quantile_predictions)
+  quantile_levels <- as.numeric(gsub("q", "", quantile_names)) / 100
+  
+  # Sort quantiles by level
+  sorted_indices <- order(quantile_levels)
+  quantile_levels <- quantile_levels[sorted_indices]
+  quantile_values <- sapply(quantile_predictions[sorted_indices], function(x) x[1])
+  
+  
+  # Extract median
+  median_value <- quantile_predictions$q50
+  
+  # Identify pairs of quantiles for central prediction intervals
+  n_quantiles <- length(quantile_levels)
+  mid_point <- which(quantile_levels >= 0.5)[1]
+  
+  interval_pairs <- list()
+  interval_alphas <- c()
+  
+  # Create symmetric interval pairs
+  for (i in 1:(mid_point-1)) {
+    upper_idx <- (n_quantiles + 1) - i
+    
+    # Calculate the alpha (complement of the interval coverage)
+    alpha <- (1 - (quantile_levels[upper_idx] - quantile_levels[i]))
+    
+    interval_pairs[[length(interval_pairs) + 1]] <- c(i, upper_idx)
+    interval_alphas <- c(interval_alphas, alpha)
+  }
+  
+  # Calculate all interval scores
+  is_values <- numeric(length(interval_pairs))
+  widths <- numeric(length(interval_pairs))
+  under_penalties <- numeric(length(interval_pairs))
+  over_penalties <- numeric(length(interval_pairs))
+  for (i in 1:length(interval_pairs)) {
+    pair <- interval_pairs[[i]]
+    alpha <- interval_alphas[i]
+    
+    lower <- quantile_values[pair[1]]
+    upper <- quantile_values[pair[2]]
+    
+   
+    
+    # Calculate interval score components
+    width <- upper - lower
+    under_penalty <- 2/alpha * (lower - actual) * (actual < lower)
+    over_penalty <- 2/alpha * (actual - upper) * (actual > upper)
+    is_score <- width + under_penalty + over_penalty
+    
+    # Store values
+    is_values[i] <- is_score
+    widths[i] <- width
+    under_penalties[i] <- under_penalty
+    over_penalties[i] <- over_penalty
+  }
+  
+  # Calculate absolute error for median
+  ae <- abs(actual - median_value)
+  
+  # Weights for the WIS calculation
+  # Alpha/2 for intervals, 1/2 for the median (as per the paper)
+  interval_weights <- interval_alphas / 2
   median_weight <- 0.5
+  all_weights <- c(median_weight, interval_weights)
   
-  # For the absolute error (median component)
-  ae <- abs(actual - lower_bounds[1])  # assuming first bound is median
+  # Calculate the weighted components
+  weighted_ae <- median_weight * ae
+  weighted_widths <- sum(interval_weights * widths)
+  weighted_unders <- sum(interval_weights * under_penalties)
+  weighted_overs <- sum(interval_weights * over_penalties)
   
-  # Calculate interval scores for each interval
-  interval_scores <- vector("list", n_intervals)
-  for (i in 1:n_intervals) {
-    interval_scores[[i]] <- calculate_interval_score(
-      lower_bounds[i], 
-      upper_bounds[i], 
-      actual, 
-      prediction_levels[i]
-    )
-  }
-  
-  # Calculate weighted components
-  weighted_width <- 0
-  weighted_under <- 0
-  weighted_over <- 0
-  
-  for (i in 1:n_intervals) {
-    weighted_width <- weighted_width + weights[i] * interval_scores[[i]]$width
-    weighted_under <- weighted_under + weights[i] * interval_scores[[i]]$under_penalty
-    weighted_over <- weighted_over + weights[i] * interval_scores[[i]]$over_penalty
-  }
-  
-  # The weighted interval score
-  wis <- (median_weight * ae + weighted_width + weighted_under + weighted_over) / (median_weight + sum(weights))
+  # Calculate WIS
+  wis <- (weighted_ae + weighted_widths + weighted_unders + weighted_overs) / (median_weight + sum(interval_weights))
   
   return(list(
     score = wis,
     absolute_error = ae,
-    width = weighted_width,
-    under_penalty = weighted_under,
-    over_penalty = weighted_over
+    width = weighted_widths / sum(interval_weights),
+    under_penalty = weighted_unders / sum(interval_weights),
+    over_penalty = weighted_overs / sum(interval_weights),
+    components = data.frame(
+      alpha = c(NA, interval_alphas),
+      is_value = c(NA, is_values),
+      width = c(NA, widths),
+      under = c(NA, under_penalties),
+      over = c(NA, over_penalties),
+      weight = all_weights,
+      type = c("Median AE", paste0((1-interval_alphas)*100, "% CI"))
+    )
   ))
 }
 
-# Creates data for a PIT histogram
-calculate_pit <- function(all_predictions) {
+# Enhanced PIT calculation with more quantiles
+calculate_pit_enhanced <- function(all_predictions) {
   # Extract actual values and predictive distribution quantiles
   pit_values <- numeric(nrow(all_predictions))
   
+  # Define all quantile columns
+  quantile_cols <- c("q1", "q2.5", "q5", "q10", "q25", "q50", "q75", "q90", "q95", "q97.5", "q99")
+  quantile_levels <- c(0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 0.75, 0.9, 0.95, 0.975, 0.99)
+  
   for (i in 1:nrow(all_predictions)) {
     actual <- all_predictions$actual[i]
-    lower <- all_predictions$lower_ci[i]
-    upper <- all_predictions$upper_ci[i]
-    predicted <- all_predictions$predicted[i]
     
-    # Simple approximation of PIT value based on limited quantiles
-    # In real application, you'd use more quantiles for better resolution
-    if (actual <= lower) {
-      pit_values[i] <- 0.025  # assuming 95% CI
-    } else if (actual >= upper) {
-      pit_values[i] <- 0.975
-    } else if (actual < predicted) {
-      # Linear interpolation between lower and median
-      pit_values[i] <- 0.025 + (0.5 - 0.025) * ((actual - lower) / (predicted - lower))
+    # Extract all quantiles for this row
+    quantiles <- as.numeric(all_predictions[i, quantile_cols])
+    
+    # Find where the actual value falls
+    if (actual <= quantiles[1]) {
+      # Below lowest quantile
+      pit_values[i] <- runif(1, 0, quantile_levels[1])
+    } else if (actual >= quantiles[length(quantiles)]) {
+      # Above highest quantile
+      pit_values[i] <- runif(1, quantile_levels[length(quantiles)], 1)
     } else {
-      # Linear interpolation between median and upper
-      pit_values[i] <- 0.5 + (0.975 - 0.5) * ((actual - predicted) / (upper - predicted))
+      # Find the interval containing the actual value
+      for (j in 1:(length(quantiles)-1)) {
+        if (actual >= quantiles[j] && actual <= quantiles[j+1]) {
+          # Linear interpolation within the interval
+          width <- quantile_levels[j+1] - quantile_levels[j]
+          position <- (actual - quantiles[j]) / (quantiles[j+1] - quantiles[j])
+          pit_values[i] <- quantile_levels[j] + width * position
+          break
+        }
+      }
     }
   }
   
   return(pit_values)
 }
 
-# Plot decomposed interval score
-plot_decomposed_is <- function(all_predictions, model_name = "BART") {
-  decomp_data <- all_predictions %>%
+# Alternative approach using base R plots if ggplot is causing issues
+plot_wis_decomposition_base <- function(all_predictions, legend_offset = -0.5) {
+  # Aggregate the components by horizon
+  horizons <- sort(unique(all_predictions$horizon))
+  
+  # Create empty matrices to store results
+  width_vals <- numeric(length(horizons))
+  under_vals <- numeric(length(horizons))
+  over_vals <- numeric(length(horizons))
+  ae_vals <- numeric(length(horizons))
+  total_vals <- numeric(length(horizons))
+  
+  # Fill matrices with aggregated values
+  for (i in 1:length(horizons)) {
+    h <- horizons[i]
+    horizon_data <- all_predictions[all_predictions$horizon == h, ]
+    
+    width_vals[i] <- mean(horizon_data$wis_width, na.rm = TRUE)
+    under_vals[i] <- mean(horizon_data$wis_under, na.rm = TRUE)
+    over_vals[i] <- mean(horizon_data$wis_over, na.rm = TRUE)
+    ae_vals[i] <- mean(horizon_data$wis_ae, na.rm = TRUE)
+    total_vals[i] <- mean(horizon_data$wis_score, na.rm = TRUE)
+  }
+  
+  # Create stacked bar plot
+  barplot_data <- rbind(ae_vals, width_vals, under_vals, over_vals)
+  
+  # Get colors from RColorBrewer
+  library(RColorBrewer)
+  colors <- brewer.pal(4, "Set2")
+  
+  # Create the plot
+  par(mar = c(5, 6, 6, 8) + 0.1)  # Adjust margins for legend
+  
+  bp <- barplot(barplot_data, col = colors, 
+                names.arg = horizons,
+                xlab = "Forecast Horizon (weeks)",
+                ylab = "Score Component",
+                main = "Weighted Interval Score Decomposition by Horizon",
+                ylim = c(0, max(total_vals) * 1.2),  # Add space for legend
+                border = "white",
+                beside = FALSE)
+  
+  # Add total WIS line
+  lines(bp, total_vals, lwd = 2, col = "black")
+  points(bp, total_vals, pch = 19, col = "black", cex = 1.5)
+  
+  # Add text labels for totals
+  text(bp, total_vals + max(total_vals) * 0.05, 
+       round(total_vals, 1), cex = 0.8)
+  
+  # Add legend
+  legend(x = par("usr")[2] + (par("usr")[2] - par("usr")[1]) * legend_offset/8, 
+         y = par("usr")[4] * 0.9,  # Position at 90% of the top
+         legend = c("Absolute Error", "Interval Width", "Underprediction Penalty", "Overprediction Penalty", "Total WIS"),
+         fill = c(colors, NA),
+         border = c(rep("white", 4), NA),
+         lty = c(NA, NA, NA, NA, 1),
+         lwd = c(NA, NA, NA, NA, 2),
+         pch = c(NA, NA, NA, NA, 19),
+         col = c(colors, "black"),
+         bg = "white",
+         cex = 0.8,
+         xpd = TRUE)
+  # Return the plot invisibly
+  invisible(bp)
+}
+
+# Coverage plot for multiple interval levels
+plot_multi_coverage <- function(all_predictions) {
+  # Calculate coverage by horizon for different interval levels
+  coverage_data <- all_predictions %>%
     group_by(horizon) %>%
     summarize(
-      width = mean(is_width),
-      under = mean(is_under),
-      over = mean(is_over),
-      total = mean(is_score)
+      coverage_50 = mean(coverage_50, na.rm = TRUE),
+      coverage_80 = mean(coverage_80, na.rm = TRUE),
+      coverage_90 = mean(coverage_90, na.rm = TRUE),
+      coverage_95 = mean(coverage_95, na.rm = TRUE)
+    ) %>%
+    pivot_longer(cols = starts_with("coverage_"),
+                 names_to = "interval",
+                 values_to = "coverage") %>%
+    mutate(
+      nominal_level = as.numeric(gsub("coverage_", "", interval)) / 100,
+      interval = factor(interval, 
+                        levels = c("coverage_50", "coverage_80", "coverage_90", "coverage_95"),
+                        labels = c("50% PI", "80% PI", "90% PI", "95% PI"))
     )
   
-  p <- ggplot(decomp_data, aes(x = horizon)) +
-    geom_bar(aes(y = width, fill = "Width"), stat = "identity", position = "stack") +
-    geom_bar(aes(y = under, fill = "Underprediction"), stat = "identity", position = "stack") +
-    geom_bar(aes(y = over, fill = "Overprediction"), stat = "identity", position = "stack") +
+  # Create coverage plot
+  p <- ggplot(coverage_data, aes(x = horizon, y = coverage, color = interval, group = interval)) +
+    geom_line(size = 1) +
+    geom_point(size = 3) +
+    geom_line(aes(y = nominal_level, group = interval), linetype = "dashed") +
+    facet_wrap(~ interval) +
     labs(
-      title = paste("Interval Score Decomposition -", model_name),
+      title = "Prediction Interval Coverage by Horizon",
+      subtitle = "Dashed lines indicate ideal coverage levels",
       x = "Forecast Horizon (weeks)",
-      y = "Score Component",
-      fill = "Component"
+      y = "Empirical Coverage",
+      color = "Interval"
     ) +
-    scale_fill_manual(values = c("Width" = "blue", "Underprediction" = "orange", "Overprediction" = "red")) +
-    theme_minimal()
+    scale_y_continuous(limits = c(0, 1), breaks = seq(0, 1, 0.2)) +
+    scale_color_brewer(palette = "Set1") +
+    theme_minimal() +
+    theme(
+      legend.position = "bottom",
+      plot.title = element_text(hjust = 0.5, face = "bold"),
+      plot.subtitle = element_text(hjust = 0.5)
+    )
   
   return(p)
 }
@@ -990,6 +1216,7 @@ plot_calibration <- function(all_predictions, model_name = "BART") {
   return(p)
 }
 
+# Metrics by point predicted
 horizon_metrics <- function() {
   horizon_metrics <- all_predictions %>%
     group_by(horizon) %>%
@@ -1020,7 +1247,7 @@ store_model_metrics <- function(all_predictions, model_name, save_path) {
     group_by(horizon) %>%
     summarize(
       mean_ae = mean(ae, na.rm = TRUE),
-      mean_is = mean(is_score, na.rm = TRUE),
+      # mean_is = mean(is_score, na.rm = TRUE),
       mean_wis = mean(wis_score, na.rm = TRUE),
       coverage_95 = mean(actual >= lower_ci & actual <= upper_ci, na.rm = TRUE),
       rmse = sqrt(mean((actual - predicted)^2, na.rm = TRUE)),
@@ -1032,7 +1259,7 @@ store_model_metrics <- function(all_predictions, model_name, save_path) {
   overall_metrics <- all_predictions %>%
     summarize(
       mean_ae = mean(ae, na.rm = TRUE),
-      mean_is = mean(is_score, na.rm = TRUE),
+      # mean_is = mean(is_score, na.rm = TRUE),
       mean_wis = mean(wis_score, na.rm = TRUE),
       coverage_95 = mean(actual >= lower_ci & actual <= upper_ci, na.rm = TRUE),
       rmse = sqrt(mean((actual - predicted)^2, na.rm = TRUE)),
@@ -1174,7 +1401,7 @@ y_test <- feature_creation() %>%
 post <- bart_model()
 
 # Generate predictions for all base weeks
-all_predictions <- generate_predictions_across_year(start_week = 4, end_week = 48, weeks_ahead = 4) 
+all_predictions <- generate_predictions_across_year(start_week = 4, end_week = 4, weeks_ahead = 4) 
 
 # Create and save the animation
 # output_format = "mp4"
@@ -1184,7 +1411,8 @@ all_predictions <- generate_predictions_across_year(start_week = 4, end_week = 4
 # Plots to analysis:
 plot_full_year()
 plot_var_imp()
-# plot_decomposed_is(all_predictions)
+plot_wis_decomposition_base(all_predictions)
+plot_multi_coverage(all_predictions)
 # plot_pit_histogram(all_predictions)
 # plot_calibration(all_predictions)
 
