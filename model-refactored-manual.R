@@ -13,6 +13,7 @@ library(gifski)
 library(transformr)
 library(parallel)
 library(forecast)
+library(tidyr)
 
 # Get API key
 API_KEY <- Sys.getenv("MOSQLIMATE_API_KEY")
@@ -188,7 +189,7 @@ feature_creation <- function() {
     return(optimal_conditions)
   }
   
-  # Vectorized approach
+  # Vectorized approach with precipitation included
   fill_lag_columns <- function(data, temp_weekly_avg) {
     # Define pairs of columns (original column, average column)
     column_pairs <- list(
@@ -199,7 +200,11 @@ feature_creation <- function() {
       list("umid_med_lag1", "avg_umidmed_lag1"),
       list("umid_med_lag2", "avg_umidmed_lag2"),
       list("umid_med_lag3", "avg_umidmed_lag3"),
-      list("umid_med_lag4", "avg_umidmed_lag4")
+      list("umid_med_lag4", "avg_umidmed_lag4"),
+      list("precip_tot_lag1", "avg_precip_tot_lag1"),
+      list("precip_tot_lag2", "avg_precip_tot_lag2"),
+      list("precip_tot_lag3", "avg_precip_tot_lag3"),
+      list("precip_tot_lag4", "avg_precip_tot_lag4")
     )
     
     # Create a lookup table for each weekly average column
@@ -228,7 +233,6 @@ feature_creation <- function() {
     
     return(data)
   }
-  
   
   
   # LAGGED CASES
@@ -325,21 +329,31 @@ feature_creation <- function() {
   dengue_data_ordered$umid_med_lag3 <- dplyr::lag(climate_data$umid_med_avg, 3)
   dengue_data_ordered$umid_med_lag4 <- dplyr::lag(climate_data$umid_med_avg, 4)
   
+  #Preciptation Total Lag
+  dengue_data_ordered$precip_tot_lag1 <- dplyr::lag(climate_data$precip_tot_sum, 1)
+  dengue_data_ordered$precip_tot_lag2 <- dplyr::lag(climate_data$precip_tot_sum, 2)
+  dengue_data_ordered$precip_tot_lag3 <- dplyr::lag(climate_data$precip_tot_sum, 3)
+  dengue_data_ordered$precip_tot_lag4 <- dplyr::lag(climate_data$precip_tot_sum, 4)
+  
   # Calculate average lag values by week of year
   temp_weekly_avg <- dengue_data_ordered %>%
     group_by(week_of_year) %>%
     summarize(
       avg_tempmed_lag1 = mean(temp_med_lag1, na.rm = TRUE),
       avg_umidmed_lag1 = mean(umid_med_lag1, na.rm = TRUE),
+      avg_precip_tot_lag1 = mean(precip_tot_lag1, na.rm = TRUE),
       
       avg_tempmed_lag2 = mean(temp_med_lag2, na.rm = TRUE),
       avg_umidmed_lag2 = mean(umid_med_lag2, na.rm = TRUE),
+      avg_precip_tot_lag2 = mean(precip_tot_lag2, na.rm = TRUE),
       
       avg_tempmed_lag3 = mean(temp_med_lag3, na.rm = TRUE),
       avg_umidmed_lag3 = mean(umid_med_lag3, na.rm = TRUE),
+      avg_precip_tot_lag3 = mean(precip_tot_lag3, na.rm = TRUE),
       
       avg_tempmed_lag4 = mean(temp_med_lag4, na.rm = TRUE),
-      avg_umidmed_lag4 = mean(umid_med_lag4, na.rm = TRUE)
+      avg_umidmed_lag4 = mean(umid_med_lag4, na.rm = TRUE),
+      avg_precip_tot_lag4 = mean(precip_tot_lag4, na.rm = TRUE)
     )
   
   dengue_data_ordered <- fill_lag_columns(dengue_data_ordered, temp_weekly_avg)
@@ -381,6 +395,10 @@ feature_creation <- function() {
     dengue_data_train$umid_med_lag2,
     dengue_data_train$umid_med_lag3,
     dengue_data_train$umid_med_lag4,
+    dengue_data_train$precip_tot_lag1,
+    dengue_data_train$precip_tot_lag2,
+    dengue_data_train$precip_tot_lag3,
+    dengue_data_train$precip_tot_lag4,
     dengue_data_train$temp_competence_optimality,
     dengue_data_train$humidity_risk,
     dengue_data_train$temp_competence_humidty_risk,
@@ -408,6 +426,10 @@ feature_creation <- function() {
     "umid_med_lag2",
     "umid_med_lag3",
     "umid_med_lag4",
+    "precip_tot_lag1",
+    "precip_tot_lag2",
+    "precip_tot_lag3",
+    "precip_tot_lag4",
     "temp_competence_optimality",
     "humidity_risk",
     "temp_competence_humidty_risk",
@@ -426,6 +448,8 @@ feature_creation <- function() {
   y_test <- cbind(
     dengue_data_test$casos,
     climate_data_test$temp_med_avg,
+    climate_data_test$umid_med_avg,
+    climate_data_test$precip_tot_sum,
     dengue_data_test$temp_competence_optimality,
     dengue_data_test$humidity_risk,
     dengue_data_test$temp_competence_humidty_risk
@@ -437,6 +461,8 @@ feature_creation <- function() {
   colnames(y_test) <- c(
     "casos",
     "temp_med_avg",
+    "umid_med_avg",
+    "precip_tot_sum",
     "temp_competence_optimality",
     "humidity_risk",
     "temp_competence_humidty_risk"
@@ -460,9 +486,9 @@ bart_model <- function () {
   set.seed(7)
   burn <- 13000
   nd <- 5000
-  k_value <- 2
-  power_value <- 2
-  ntree_value <- 150L
+  k_value <- 0.5
+  power_value <- 1
+  ntree_value <- 200L
   post <- wbart(x_train, y_train, nskip = burn, ndpost = nd, k=k_value, power = power_value, ntree = ntree_value, sparse = TRUE)
   
   return (post)
@@ -480,11 +506,57 @@ generate_predictions_across_year <- function(start_week, end_week, weeks_ahead) 
     li_predictions_2023 <- numeric(weeks_ahead)
     ui_predictions_2023 <- numeric(weeks_ahead)
     
+    # Initialize vectors for quantiles and metrics
+    q1 <- numeric(weeks_ahead)
+    q2.5 <- numeric(weeks_ahead)
+    q5 <- numeric(weeks_ahead)
+    q10 <- numeric(weeks_ahead)
+    q25 <- numeric(weeks_ahead)
+    q50 <- numeric(weeks_ahead)
+    q75 <- numeric(weeks_ahead)
+    q90 <- numeric(weeks_ahead)
+    q95 <- numeric(weeks_ahead)
+    q97.5 <- numeric(weeks_ahead)
+    q99 <- numeric(weeks_ahead)
+    
+    is_50_score <- numeric(weeks_ahead)
+    is_50_width <- numeric(weeks_ahead)
+    is_50_under <- numeric(weeks_ahead)
+    is_50_over <- numeric(weeks_ahead)
+    
+    is_80_score <- numeric(weeks_ahead)
+    is_80_width <- numeric(weeks_ahead)
+    is_80_under <- numeric(weeks_ahead)
+    is_80_over <- numeric(weeks_ahead)
+    
+    is_90_score <- numeric(weeks_ahead)
+    is_90_width <- numeric(weeks_ahead)
+    is_90_under <- numeric(weeks_ahead)
+    is_90_over <- numeric(weeks_ahead)
+    
+    is_95_score <- numeric(weeks_ahead)
+    is_95_width <- numeric(weeks_ahead)
+    is_95_under <- numeric(weeks_ahead)
+    is_95_over <- numeric(weeks_ahead)
+    
+    wis_score <- numeric(weeks_ahead)
+    wis_ae <- numeric(weeks_ahead)
+    wis_width <- numeric(weeks_ahead)
+    wis_under <- numeric(weeks_ahead)
+    wis_over <- numeric(weeks_ahead)
+    
+    coverage_50 <- numeric(weeks_ahead)
+    coverage_80 <- numeric(weeks_ahead)
+    coverage_90 <- numeric(weeks_ahead)
+    coverage_95 <- numeric(weeks_ahead)
+    
     # Get recent values for prediction
     v1 <- y_test$casos[week_base]
     v2 <- y_test$casos[week_base - 1]
     v3 <- y_test$casos[week_base - 2]
     v4 <- y_test$casos[week_base - 3]
+    
+    avg_precip_lag <- ((y_test$precip_tot_sum[week_base]) + (y_test$precip_tot_sum[week_base - 1]) + (y_test$precip_tot_sum[week_base - 2]) + (y_test$precip_tot_sum[week_base -3])) / 4
     
     # Get actual values for comparison
     actual_values <- y_test$casos[(week_base + 1):(week_base + weeks_ahead)]
@@ -497,10 +569,14 @@ generate_predictions_across_year <- function(start_week, end_week, weeks_ahead) 
         current_temp_med_lag2 <- y_test$temp_med_avg[week_base]
         current_temp_med_lag3 <- y_test$temp_med_avg[week_base]
         current_temp_med_lag4 <- y_test$temp_med_avg[week_base]
-        current_umid_med_lag1 <- y_test$temp_med_avg[week_base]
-        current_umid_med_lag2 <- y_test$temp_med_avg[week_base]
-        current_umid_med_lag3 <- y_test$temp_med_avg[week_base]
-        current_umid_med_lag4 <- y_test$temp_med_avg[week_base]
+        current_umid_med_lag1 <- y_test$umid_med_avg[week_base]
+        current_umid_med_lag2 <- y_test$umid_med_avg[week_base]
+        current_umid_med_lag3 <- y_test$umid_med_avg[week_base]
+        current_umid_med_lag4 <- y_test$umid_med_avg[week_base]
+        current_precip_tot_lag1 <- avg_precip_lag
+        current_precip_tot_lag2 <- avg_precip_lag
+        current_precip_tot_lag3 <- avg_precip_lag
+        current_precip_tot_lag4 <- avg_precip_lag
         current_temp_competence_optimality <- y_test$temp_competence_optimality[week_base]
         current_humidity_risk <- y_test$humidity_risk[week_base]
         current_temp_competence_humidty_risk <- y_test$temp_competence_humidty_risk[week_base]
@@ -525,10 +601,14 @@ generate_predictions_across_year <- function(start_week, end_week, weeks_ahead) 
         current_temp_med_lag2 <- y_test$temp_med_avg[week_base]
         current_temp_med_lag3 <- y_test$temp_med_avg[week_base]
         current_temp_med_lag4 <- y_test$temp_med_avg[week_base]
-        current_umid_med_lag1 <- y_test$temp_med_avg[week_base]
-        current_umid_med_lag2 <- y_test$temp_med_avg[week_base]
-        current_umid_med_lag3 <- y_test$temp_med_avg[week_base]
-        current_umid_med_lag4 <- y_test$temp_med_avg[week_base]
+        current_umid_med_lag1 <- y_test$umid_med_avg[week_base]
+        current_umid_med_lag2 <- y_test$umid_med_avg[week_base]
+        current_umid_med_lag3 <- y_test$umid_med_avg[week_base]
+        current_umid_med_lag4 <- y_test$umid_med_avg[week_base]
+        current_precip_tot_lag1 <- avg_precip_lag
+        current_precip_tot_lag2 <- avg_precip_lag
+        current_precip_tot_lag3 <- avg_precip_lag
+        current_precip_tot_lag4 <- avg_precip_lag
         current_temp_competence_optimality <- y_test$temp_competence_optimality[week_base]
         current_humidity_risk <- y_test$humidity_risk[week_base]
         current_temp_competence_humidty_risk <- y_test$temp_competence_humidty_risk[week_base]
@@ -553,10 +633,14 @@ generate_predictions_across_year <- function(start_week, end_week, weeks_ahead) 
         current_temp_med_lag2 <- y_test$temp_med_avg[week_base]
         current_temp_med_lag3 <- y_test$temp_med_avg[week_base]
         current_temp_med_lag4 <- y_test$temp_med_avg[week_base]
-        current_umid_med_lag1 <- y_test$temp_med_avg[week_base]
-        current_umid_med_lag2 <- y_test$temp_med_avg[week_base]
-        current_umid_med_lag3 <- y_test$temp_med_avg[week_base]
-        current_umid_med_lag4 <- y_test$temp_med_avg[week_base]
+        current_umid_med_lag1 <- y_test$umid_med_avg[week_base]
+        current_umid_med_lag2 <- y_test$umid_med_avg[week_base]
+        current_umid_med_lag3 <- y_test$umid_med_avg[week_base]
+        current_umid_med_lag4 <- y_test$umid_med_avg[week_base]
+        current_precip_tot_lag1 <- avg_precip_lag
+        current_precip_tot_lag2 <- avg_precip_lag
+        current_precip_tot_lag3 <- avg_precip_lag
+        current_precip_tot_lag4 <- avg_precip_lag
         current_temp_competence_optimality <- y_test$temp_competence_optimality[week_base]
         current_humidity_risk <- y_test$humidity_risk[week_base]
         current_temp_competence_humidty_risk <- y_test$temp_competence_humidty_risk[week_base]
@@ -581,10 +665,14 @@ generate_predictions_across_year <- function(start_week, end_week, weeks_ahead) 
         current_temp_med_lag2 <- y_test$temp_med_avg[week_base]
         current_temp_med_lag3 <- y_test$temp_med_avg[week_base]
         current_temp_med_lag4 <- y_test$temp_med_avg[week_base]
-        current_umid_med_lag1 <- y_test$temp_med_avg[week_base]
-        current_umid_med_lag2 <- y_test$temp_med_avg[week_base]
-        current_umid_med_lag3 <- y_test$temp_med_avg[week_base]
-        current_umid_med_lag4 <- y_test$temp_med_avg[week_base]
+        current_umid_med_lag1 <- y_test$umid_med_avg[week_base]
+        current_umid_med_lag2 <- y_test$umid_med_avg[week_base]
+        current_umid_med_lag3 <- y_test$umid_med_avg[week_base]
+        current_umid_med_lag4 <- y_test$umid_med_avg[week_base]
+        current_precip_tot_lag1 <- avg_precip_lag
+        current_precip_tot_lag2 <- avg_precip_lag
+        current_precip_tot_lag3 <- avg_precip_lag
+        current_precip_tot_lag4 <- avg_precip_lag
         current_temp_competence_optimality <- y_test$temp_competence_optimality[week_base]
         current_humidity_risk <- y_test$humidity_risk[week_base]
         current_temp_competence_humidty_risk <- y_test$temp_competence_humidty_risk[week_base]
@@ -609,10 +697,14 @@ generate_predictions_across_year <- function(start_week, end_week, weeks_ahead) 
         current_temp_med_lag2 <- y_test$temp_med_avg[week_base]
         current_temp_med_lag3 <- y_test$temp_med_avg[week_base]
         current_temp_med_lag4 <- y_test$temp_med_avg[week_base]
-        current_umid_med_lag1 <- y_test$temp_med_avg[week_base]
-        current_umid_med_lag2 <- y_test$temp_med_avg[week_base]
-        current_umid_med_lag3 <- y_test$temp_med_avg[week_base]
-        current_umid_med_lag4 <- y_test$temp_med_avg[week_base]
+        current_umid_med_lag1 <- y_test$umid_med_avg[week_base]
+        current_umid_med_lag2 <- y_test$umid_med_avg[week_base]
+        current_umid_med_lag3 <- y_test$umid_med_avg[week_base]
+        current_umid_med_lag4 <- y_test$umid_med_avg[week_base]
+        current_precip_tot_lag1 <- avg_precip_lag
+        current_precip_tot_lag2 <- avg_precip_lag
+        current_precip_tot_lag3 <- avg_precip_lag
+        current_precip_tot_lag4 <- avg_precip_lag
         current_temp_competence_optimality <- y_test$temp_competence_optimality[week_base]
         current_humidity_risk <- y_test$humidity_risk[week_base]
         current_temp_competence_humidty_risk <- y_test$temp_competence_humidty_risk[week_base]
@@ -648,6 +740,10 @@ generate_predictions_across_year <- function(start_week, end_week, weeks_ahead) 
         umid_med_lag2 = current_umid_med_lag2,
         umid_med_lag3 = current_umid_med_lag3,
         umid_med_lag4 = current_umid_med_lag4,
+        precip_tot_lag1 = current_precip_tot_lag1,
+        precip_tot_lag2 = current_precip_tot_lag2,
+        precip_tot_lag3 = current_precip_tot_lag3,
+        precip_tot_lag4 = current_precip_tot_lag4,
         temp_competence_optimality = current_temp_competence_optimality,
         humidity_risk = current_humidity_risk,
         temp_competence_humidty_risk = current_temp_competence_humidty_risk,
@@ -661,20 +757,123 @@ generate_predictions_across_year <- function(start_week, end_week, weeks_ahead) 
       )
 
       # Make prediction
+      quantile_levels <- c(0.01, 0.025, 0.05, 0.1, 0.2, 0.25, 0.3, 0.4, 0.5, 
+                           0.6, 0.7, 0.75, 0.8, 0.9, 0.95, 0.975, 0.99)
       prediction <- predict(post, newdata = recursive_data)
       median_prediction <- InvBoxCox(apply(prediction, 2, median), lambda)
       mean_prediction <- InvBoxCox(apply(prediction, 2, mean), lambda)
       li_prediction <- InvBoxCox(apply(prediction, 2, quantile, probs = 0.025), lambda)
       ui_prediction <- InvBoxCox(apply(prediction, 2, quantile, probs = 0.975), lambda)
-
       
-      # Store predictions
+      # Extract all quantiles
+      q1[week] <- InvBoxCox(apply(prediction, 2, quantile, probs = 0.01), lambda)
+      q2.5[week] <- InvBoxCox(apply(prediction, 2, quantile, probs = 0.025), lambda)
+      q5[week] <- InvBoxCox(apply(prediction, 2, quantile, probs = 0.05), lambda)
+      q10[week] <- InvBoxCox(apply(prediction, 2, quantile, probs = 0.1), lambda)
+      q25[week] <- InvBoxCox(apply(prediction, 2, quantile, probs = 0.25), lambda)
+      q50[week] <- InvBoxCox(apply(prediction, 2, median), lambda)
+      q75[week] <- InvBoxCox(apply(prediction, 2, quantile, probs = 0.75), lambda)
+      q90[week] <- InvBoxCox(apply(prediction, 2, quantile, probs = 0.9), lambda)
+      q95[week] <- InvBoxCox(apply(prediction, 2, quantile, probs = 0.95), lambda)
+      q97.5[week] <- InvBoxCox(apply(prediction, 2, quantile, probs = 0.975), lambda)
+      q99[week] <- InvBoxCox(apply(prediction, 2, quantile, probs = 0.99), lambda)
+      
+      
+      # Store standard predictions
       mean_predictions_2023[week] <- mean_prediction
       li_predictions_2023[week] <- li_prediction
       ui_predictions_2023[week] <- ui_prediction
+      
+      # Create a dictionary-like structure for quantiles
+      quantiles <- list(
+        q1 = q1[week],
+        q2.5 = q2.5[week],
+        q5 = q5[week],
+        q10 = q10[week],
+        q25 = q25[week],
+        q50 = q50[week],
+        q75 = q75[week],
+        q90 = q90[week],
+        q95 = q95[week],
+        q97.5 = q97.5[week],
+        q99 = q99[week]
+      )
+      
+      # Get actual value for this week
+      actual <- actual_values[week]
+      
+      # Calculate interval scores for standard intervals
+      # 50% interval
+      is_50 <- calculate_interval_score(
+        q25[week],
+        q75[week],
+        actual,
+        0.5
+      )
+      
+      # 80% interval
+      is_80 <- calculate_interval_score(
+        q10[week],
+        q90[week],
+        actual,
+        0.2
+      )
+      
+      # 90% interval
+      is_90 <- calculate_interval_score(
+        q5[week],
+        q95[week],
+        actual,
+        0.1
+      )
+      
+      # 95% interval
+      is_95 <- calculate_interval_score(
+        q2.5[week],
+        q97.5[week],
+        actual,
+        0.05
+      )
+      
+      # Store interval scores
+      is_50_score[week] = is_50$score
+      is_50_width[week] = is_50$width
+      is_50_under[week] = is_50$under_penalty
+      is_50_over[week] = is_50$over_penalty
+      
+      is_80_score[week] = is_80$score
+      is_80_width[week] = is_80$width
+      is_80_under[week] = is_80$under_penalty
+      is_80_over[week] = is_80$over_penalty
+      
+      is_90_score[week] = is_90$score
+      is_90_width[week] = is_90$width
+      is_90_under[week] = is_90$under_penalty
+      is_90_over[week] = is_90$over_penalty
+      
+      is_95_score[week] = is_95$score
+      is_95_width[week] = is_95$width
+      is_95_under[week] = is_95$under_penalty
+      is_95_over[week] = is_95$over_penalty
+      
+      # Calculate proper WIS
+      wis_result <- calculate_proper_wis(quantiles, actual)
+      
+      # Store WIS
+      wis_score[week] = wis_result$score
+      wis_ae[week] = wis_result$absolute_error
+      wis_width[week] = wis_result$width
+      wis_under[week] = wis_result$under_penalty
+      wis_over[week] = wis_result$over_penalty
+      
+      # Coverage metrics
+      coverage_50[week] = as.numeric(actual >= q25[week] & actual <= q75[week])
+      coverage_80[week] = as.numeric(actual >= q10[week] & actual <= q90[week])
+      coverage_90[week] = as.numeric(actual >= q5[week] & actual <= q95[week])
+      coverage_95[week] = as.numeric(actual >= q2.5[week] & actual <= q97.5[week])
     }
-
-    # Add the current predictions to the overall data frame
+    
+    # After generating all predictions for this base week, add them to the overall data frame
     for (i in 1:weeks_ahead) {
       prediction_week <- week_base + i
       
@@ -683,44 +882,65 @@ generate_predictions_across_year <- function(start_week, end_week, weeks_ahead) 
         next
       }
       
-      # Actual value
-      actual <- y_test$casos[prediction_week]
-      
-      # Calculate interval score for 95% CI
-      is_95 <- calculate_interval_score(
-        li_predictions_2023[i],
-        ui_predictions_2023[i],
-        actual,
-        0.05  # alpha = 0.05 for 95% CI
-      )
-      
-      # For WIS, we need multiple intervals, but only have 95% CI in this example
-      # This is a simplified version - in practice, you'd use more intervals
-      wis <- calculate_wis(
-        c(0.05), # just using 95% CI for simplicity
-        c(mean_predictions_2023[i], li_predictions_2023[i]),
-        c(mean_predictions_2023[i], ui_predictions_2023[i]),
-        actual
-      )
-      
       new_row <- data.frame(
         base_week = week_base,
         prediction_week = prediction_week,
         actual = y_test$casos[prediction_week],
         predicted = mean_predictions_2023[i],
-        predicted_median = median_prediction,
+        predicted_median = q50[i],
         lower_ci = li_predictions_2023[i],
         upper_ci = ui_predictions_2023[i],
+        
+        # Store all quantiles from the vectors we created
+        q1 = q1[i],
+        q2.5 = q2.5[i],
+        q5 = q5[i],
+        q10 = q10[i],
+        q25 = q25[i],
+        q50 = q50[i],
+        q75 = q75[i],
+        q90 = q90[i],
+        q95 = q95[i],
+        q97.5 = q97.5[i],
+        q99 = q99[i],
+        
+        # Store interval scores
+        is_50_score = is_50_score[i],
+        is_50_width = is_50_width[i],
+        is_50_under = is_50_under[i],
+        is_50_over = is_50_over[i],
+        
+        is_80_score = is_80_score[i],
+        is_80_width = is_80_width[i],
+        is_80_under = is_80_under[i],
+        is_80_over = is_80_over[i],
+        
+        is_90_score = is_90_score[i],
+        is_90_width = is_90_width[i],
+        is_90_under = is_90_under[i],
+        is_90_over = is_90_over[i],
+        
+        is_95_score = is_95_score[i],
+        is_95_width = is_95_width[i],
+        is_95_under = is_95_under[i],
+        is_95_over = is_95_over[i],
+        
+        # Store WIS components
+        wis_score = wis_score[i],
+        wis_ae = wis_ae[i],
+        wis_width = wis_width[i],
+        wis_under = wis_under[i],
+        wis_over = wis_over[i],
+        
+        # Store coverage metrics
+        coverage_50 = coverage_50[i],
+        coverage_80 = coverage_80[i],
+        coverage_90 = coverage_90[i],
+        coverage_95 = coverage_95[i],
+        
+        # Include horizon and absolute error
         horizon = i,
-        ae = abs(actual - mean_predictions_2023[i]),
-        is_score = is_95$score,
-        is_width = is_95$width,
-        is_under = is_95$under_penalty,
-        is_over = is_95$over_penalty,
-        wis_score = wis$score,
-        wis_width = wis$width,
-        wis_under = wis$under_penalty,
-        wis_over = wis$over_penalty
+        ae = abs(y_test$casos[prediction_week] - mean_predictions_2023[i])
       )
       
       all_predictions <- rbind(all_predictions, new_row)
@@ -730,7 +950,7 @@ generate_predictions_across_year <- function(start_week, end_week, weeks_ahead) 
     cat(sprintf("Processed base week %d/%d\r", week_base, end_week))
   }
   # Calculate PIT values
-  all_predictions$pit <- calculate_pit(all_predictions)
+  all_predictions$pit <- calculate_pit_enhanced(all_predictions)
   
   return(all_predictions)
 }
@@ -852,6 +1072,10 @@ plot_var_imp <- function() {
     "umid_med_lag2",
     "umid_med_lag3",
     "umid_med_lag4",
+    "precip_tot_lag1",
+    "precip_tot_lag2",
+    "precip_tot_lag3",
+    "precip_tot_lag4",
     "temp_competence_optimality",
     "humidity_risk",
     "temp_competence_humidty_risk",
@@ -899,100 +1123,254 @@ calculate_interval_score <- function(lower, upper, actual, alpha) {
 }
 
 # Calculates the weighted interval score using multiple prediction intervals
-calculate_wis <- function(prediction_levels, lower_bounds, upper_bounds, actual) {
-  n_intervals <- length(prediction_levels)
-  weights <- prediction_levels / 2  # as per the paper recommendation
+calculate_proper_wis <- function(quantiles_list, actual) {
+  # Extract quantiles from the list
+  all_quantiles <- c(
+    quantiles_list$q1,
+    quantiles_list$q2.5,
+    quantiles_list$q5,
+    quantiles_list$q10, 
+    quantiles_list$q25,
+    quantiles_list$q50,
+    quantiles_list$q75,
+    quantiles_list$q90,
+    quantiles_list$q95,
+    quantiles_list$q97.5,
+    quantiles_list$q99
+  )
+  
+  # Define the corresponding levels
+  all_levels <- c(0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 0.75, 0.9, 0.95, 0.975, 0.99)
+  
+  # Sort them
+  sorted_indices <- order(all_levels)
+  quantile_levels <- all_levels[sorted_indices]
+  quantile_values <- all_quantiles[sorted_indices]
+  
+  # Extract median
+  median_value <- quantiles_list$q50
+  
+  # Identify pairs of quantiles for central prediction intervals
+  n_quantiles <- length(quantile_levels)
+  mid_point <- which(quantile_levels >= 0.5)[1]
+  
+  interval_pairs <- list()
+  interval_alphas <- c()
+  
+  # Create symmetric interval pairs
+  for (i in 1:(mid_point-1)) {
+    upper_idx <- (n_quantiles + 1) - i
+    
+    # Calculate the alpha (complement of the interval coverage)
+    alpha <- (1 - (quantile_levels[upper_idx] - quantile_levels[i]))
+    
+    interval_pairs[[length(interval_pairs) + 1]] <- c(i, upper_idx)
+    interval_alphas <- c(interval_alphas, alpha)
+  }
+  
+  # Calculate all interval scores
+  is_values <- numeric(length(interval_pairs))
+  widths <- numeric(length(interval_pairs))
+  under_penalties <- numeric(length(interval_pairs))
+  over_penalties <- numeric(length(interval_pairs))
+  
+  for (i in 1:length(interval_pairs)) {
+    pair <- interval_pairs[[i]]
+    alpha <- interval_alphas[i]
+    
+    lower <- quantile_values[pair[1]]
+    upper <- quantile_values[pair[2]]
+    
+    # Calculate interval score components
+    width <- upper - lower
+    under_penalty <- 2/alpha * (lower - actual) * (actual < lower)
+    over_penalty <- 2/alpha * (actual - upper) * (actual > upper)
+    is_score <- width + under_penalty + over_penalty
+    
+    # Store values
+    is_values[i] <- is_score
+    widths[i] <- width
+    under_penalties[i] <- under_penalty
+    over_penalties[i] <- over_penalty
+  }
+  
+  # Calculate absolute error for median
+  ae <- abs(actual - median_value)
+  
+  # Weights for the WIS calculation
+  # Alpha/2 for intervals, 1/2 for the median (as per the paper)
+  interval_weights <- interval_alphas / 2
   median_weight <- 0.5
+  all_weights <- c(median_weight, interval_weights)
   
-  # For the absolute error (median component)
-  ae <- abs(actual - lower_bounds[1])  # assuming first bound is median
+  # Calculate the weighted components
+  weighted_ae <- median_weight * ae
+  weighted_widths <- sum(interval_weights * widths)
+  weighted_unders <- sum(interval_weights * under_penalties)
+  weighted_overs <- sum(interval_weights * over_penalties)
   
-  # Calculate interval scores for each interval
-  interval_scores <- vector("list", n_intervals)
-  for (i in 1:n_intervals) {
-    interval_scores[[i]] <- calculate_interval_score(
-      lower_bounds[i], 
-      upper_bounds[i], 
-      actual, 
-      prediction_levels[i]
-    )
-  }
+  # Calculate WIS
+  wis <- (weighted_ae + weighted_widths + weighted_unders + weighted_overs) / (median_weight + sum(interval_weights))
   
-  # Calculate weighted components
-  weighted_width <- 0
-  weighted_under <- 0
-  weighted_over <- 0
-  
-  for (i in 1:n_intervals) {
-    weighted_width <- weighted_width + weights[i] * interval_scores[[i]]$width
-    weighted_under <- weighted_under + weights[i] * interval_scores[[i]]$under_penalty
-    weighted_over <- weighted_over + weights[i] * interval_scores[[i]]$over_penalty
-  }
-  
-  # The weighted interval score
-  wis <- (median_weight * ae + weighted_width + weighted_under + weighted_over) / (median_weight + sum(weights))
-  
+  # Return the components
   return(list(
     score = wis,
     absolute_error = ae,
-    width = weighted_width,
-    under_penalty = weighted_under,
-    over_penalty = weighted_over
+    width = weighted_widths / sum(interval_weights),
+    under_penalty = weighted_unders / sum(interval_weights),
+    over_penalty = weighted_overs / sum(interval_weights)
   ))
 }
 
-# Creates data for a PIT histogram
-calculate_pit <- function(all_predictions) {
+# Enhanced PIT calculation with more quantiles
+calculate_pit_enhanced <- function(all_predictions) {
   # Extract actual values and predictive distribution quantiles
   pit_values <- numeric(nrow(all_predictions))
   
+  # Define all quantile columns
+  quantile_cols <- c("q1", "q2.5", "q5", "q10", "q25", "q50", "q75", "q90", "q95", "q97.5", "q99")
+  quantile_levels <- c(0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 0.75, 0.9, 0.95, 0.975, 0.99)
+  
   for (i in 1:nrow(all_predictions)) {
     actual <- all_predictions$actual[i]
-    lower <- all_predictions$lower_ci[i]
-    upper <- all_predictions$upper_ci[i]
-    predicted <- all_predictions$predicted[i]
     
-    # Simple approximation of PIT value based on limited quantiles
-    # In real application, you'd use more quantiles for better resolution
-    if (actual <= lower) {
-      pit_values[i] <- 0.025  # assuming 95% CI
-    } else if (actual >= upper) {
-      pit_values[i] <- 0.975
-    } else if (actual < predicted) {
-      # Linear interpolation between lower and median
-      pit_values[i] <- 0.025 + (0.5 - 0.025) * ((actual - lower) / (predicted - lower))
+    # Extract all quantiles for this row
+    quantiles <- as.numeric(all_predictions[i, quantile_cols])
+    
+    # Find where the actual value falls
+    if (actual <= quantiles[1]) {
+      # Below lowest quantile
+      pit_values[i] <- runif(1, 0, quantile_levels[1])
+    } else if (actual >= quantiles[length(quantiles)]) {
+      # Above highest quantile
+      pit_values[i] <- runif(1, quantile_levels[length(quantiles)], 1)
     } else {
-      # Linear interpolation between median and upper
-      pit_values[i] <- 0.5 + (0.975 - 0.5) * ((actual - predicted) / (upper - predicted))
+      # Find the interval containing the actual value
+      for (j in 1:(length(quantiles)-1)) {
+        if (actual >= quantiles[j] && actual <= quantiles[j+1]) {
+          # Linear interpolation within the interval
+          width <- quantile_levels[j+1] - quantile_levels[j]
+          position <- (actual - quantiles[j]) / (quantiles[j+1] - quantiles[j])
+          pit_values[i] <- quantile_levels[j] + width * position
+          break
+        }
+      }
     }
   }
   
   return(pit_values)
 }
 
-# Plot decomposed interval score
-plot_decomposed_is <- function(all_predictions, model_name = "BART") {
-  decomp_data <- all_predictions %>%
+# Alternative approach using base R plots if ggplot is causing issues
+plot_wis_decomposition_base <- function(all_predictions, legend_offset = -0.5) {
+  # Aggregate the components by horizon
+  horizons <- sort(unique(all_predictions$horizon))
+  
+  # Create empty matrices to store results
+  width_vals <- numeric(length(horizons))
+  under_vals <- numeric(length(horizons))
+  over_vals <- numeric(length(horizons))
+  ae_vals <- numeric(length(horizons))
+  total_vals <- numeric(length(horizons))
+  
+  # Fill matrices with aggregated values
+  for (i in 1:length(horizons)) {
+    h <- horizons[i]
+    horizon_data <- all_predictions[all_predictions$horizon == h, ]
+    
+    width_vals[i] <- mean(horizon_data$wis_width, na.rm = TRUE)
+    under_vals[i] <- mean(horizon_data$wis_under, na.rm = TRUE)
+    over_vals[i] <- mean(horizon_data$wis_over, na.rm = TRUE)
+    ae_vals[i] <- mean(horizon_data$wis_ae, na.rm = TRUE)
+    total_vals[i] <- mean(horizon_data$wis_score, na.rm = TRUE)
+  }
+  
+  # Create stacked bar plot
+  barplot_data <- rbind(ae_vals, width_vals, under_vals, over_vals)
+  
+  # Get colors from RColorBrewer
+  library(RColorBrewer)
+  colors <- brewer.pal(4, "Set2")
+  
+  # Create the plot
+  par(mar = c(5, 6, 6, 8) + 0.1)  # Adjust margins for legend
+  
+  bp <- barplot(barplot_data, col = colors, 
+                names.arg = horizons,
+                xlab = "Forecast Horizon (weeks)",
+                ylab = "Score Component",
+                main = "Weighted Interval Score Decomposition by Horizon",
+                ylim = c(0, max(total_vals) * 1.2),  # Add space for legend
+                border = "white",
+                beside = FALSE)
+  
+  # Add total WIS line
+  lines(bp, total_vals, lwd = 2, col = "black")
+  points(bp, total_vals, pch = 19, col = "black", cex = 1.5)
+  
+  # Add text labels for totals
+  text(bp, total_vals + max(total_vals) * 0.05, 
+       round(total_vals, 1), cex = 0.8)
+  
+  # Add legend
+  legend(x = par("usr")[2] + (par("usr")[2] - par("usr")[1]) * legend_offset/8, 
+         y = par("usr")[4] * 0.9,  # Position at 90% of the top
+         legend = c("Absolute Error", "Interval Width", "Underprediction Penalty", "Overprediction Penalty", "Total WIS"),
+         fill = c(colors, NA),
+         border = c(rep("white", 4), NA),
+         lty = c(NA, NA, NA, NA, 1),
+         lwd = c(NA, NA, NA, NA, 2),
+         pch = c(NA, NA, NA, NA, 19),
+         col = c(colors, "black"),
+         bg = "white",
+         cex = 0.8,
+         xpd = TRUE)
+  # Return the plot invisibly
+  invisible(bp)
+}
+
+# Coverage plot for multiple interval levels
+plot_multi_coverage <- function(all_predictions) {
+  # Calculate coverage by horizon for different interval levels
+  coverage_data <- all_predictions %>%
     group_by(horizon) %>%
     summarize(
-      width = mean(is_width),
-      under = mean(is_under),
-      over = mean(is_over),
-      total = mean(is_score)
+      coverage_50 = mean(coverage_50, na.rm = TRUE),
+      coverage_80 = mean(coverage_80, na.rm = TRUE),
+      coverage_90 = mean(coverage_90, na.rm = TRUE),
+      coverage_95 = mean(coverage_95, na.rm = TRUE)
+    ) %>%
+    pivot_longer(cols = starts_with("coverage_"),
+                 names_to = "interval",
+                 values_to = "coverage") %>%
+    mutate(
+      nominal_level = as.numeric(gsub("coverage_", "", interval)) / 100,
+      interval = factor(interval, 
+                        levels = c("coverage_50", "coverage_80", "coverage_90", "coverage_95"),
+                        labels = c("50% PI", "80% PI", "90% PI", "95% PI"))
     )
   
-  p <- ggplot(decomp_data, aes(x = horizon)) +
-    geom_bar(aes(y = width, fill = "Width"), stat = "identity", position = "stack") +
-    geom_bar(aes(y = under, fill = "Underprediction"), stat = "identity", position = "stack") +
-    geom_bar(aes(y = over, fill = "Overprediction"), stat = "identity", position = "stack") +
+  # Create coverage plot
+  p <- ggplot(coverage_data, aes(x = horizon, y = coverage, color = interval, group = interval)) +
+    geom_line(size = 1) +
+    geom_point(size = 3) +
+    geom_line(aes(y = nominal_level, group = interval), linetype = "dashed") +
+    facet_wrap(~ interval) +
     labs(
-      title = paste("Interval Score Decomposition -", model_name),
+      title = "Prediction Interval Coverage by Horizon",
+      subtitle = "Dashed lines indicate ideal coverage levels",
       x = "Forecast Horizon (weeks)",
-      y = "Score Component",
-      fill = "Component"
+      y = "Empirical Coverage",
+      color = "Interval"
     ) +
-    scale_fill_manual(values = c("Width" = "blue", "Underprediction" = "orange", "Overprediction" = "red")) +
-    theme_minimal()
+    scale_y_continuous(limits = c(0, 1), breaks = seq(0, 1, 0.2)) +
+    scale_color_brewer(palette = "Set1") +
+    theme_minimal() +
+    theme(
+      legend.position = "bottom",
+      plot.title = element_text(hjust = 0.5, face = "bold"),
+      plot.subtitle = element_text(hjust = 0.5)
+    )
   
   return(p)
 }
@@ -1033,7 +1411,6 @@ horizon_metrics <- function() {
     group_by(horizon) %>%
     summarize(
       mean_ae = mean(ae),
-      mean_is = mean(is_score),
       mean_wis = mean(wis_score),
       coverage_95 = mean(actual >= lower_ci & actual <= upper_ci)
     )
@@ -1058,7 +1435,7 @@ store_model_metrics <- function(all_predictions, model_name, save_path) {
     group_by(horizon) %>%
     summarize(
       mean_ae = mean(ae, na.rm = TRUE),
-      mean_is = mean(is_score, na.rm = TRUE),
+      # mean_is = mean(is_score, na.rm = TRUE),
       mean_wis = mean(wis_score, na.rm = TRUE),
       coverage_95 = mean(actual >= lower_ci & actual <= upper_ci, na.rm = TRUE),
       rmse = sqrt(mean((actual - predicted)^2, na.rm = TRUE)),
@@ -1070,7 +1447,7 @@ store_model_metrics <- function(all_predictions, model_name, save_path) {
   overall_metrics <- all_predictions %>%
     summarize(
       mean_ae = mean(ae, na.rm = TRUE),
-      mean_is = mean(is_score, na.rm = TRUE),
+      # mean_is = mean(is_score, na.rm = TRUE),
       mean_wis = mean(wis_score, na.rm = TRUE),
       coverage_95 = mean(actual >= lower_ci & actual <= upper_ci, na.rm = TRUE),
       rmse = sqrt(mean((actual - predicted)^2, na.rm = TRUE)),
@@ -1197,6 +1574,222 @@ visualize_model_metrics <- function(model_name, metrics_dir = NULL) {
   ))
 }
 
+# Grid search function for BART model hyperparameter optimization
+grid_search_bart <- function(
+    k_range = seq(0.5, 0.5, by = 0.5),
+    power_range = seq(0.5, 0.5, by = 0.5),
+    ntree_range = seq(50, 50, by = 50),
+    start_week = 4,
+    end_week = 48,
+    weeks_ahead = 4
+) {
+  # Create a dataframe to store results
+  results <- data.frame(
+    k_value = numeric(),
+    power_value = numeric(),
+    ntree_value = integer(),
+    mean_wis = numeric(),
+    mean_ae = numeric(),
+    rmse = numeric(),
+    mae = numeric(),
+    coverage_95 = numeric(),
+    file_path = character(),
+    stringsAsFactors = FALSE
+  )
+  
+  # Track the best model
+  best_model <- list(
+    k_value = NA,
+    power_value = NA, 
+    ntree_value = NA,
+    mean_wis = Inf,
+    post = NULL,
+    predictions = NULL
+  )
+  
+  # Total number of combinations for progress tracking
+  total_combinations <- length(k_range) * length(power_range) * length(ntree_range)
+  current_combination <- 0
+  
+  # Iterate through all combinations
+  for (k in k_range) {
+    for (power in power_range) {
+      for (ntree in ntree_range) {
+        # Update progress counter
+        current_combination <- current_combination + 1
+        model_name <- sprintf("k_%.1f_power_%.1f_ntree_%d", k, power, ntree)
+        
+        cat(sprintf("\nRunning combination %d/%d: %s\n", 
+                    current_combination, total_combinations, model_name))
+        
+        # Set hyperparameters and train model
+        set.seed(7)  # Ensure reproducibility for each run
+        burn <- 13000
+        nd <- 5000
+        
+        cat("Training BART model...\n")
+        post <- wbart(
+          x_train, y_train, 
+          nskip = burn, 
+          ndpost = nd, 
+          k = k, 
+          power = power, 
+          ntree = ntree, 
+          sparse = TRUE
+        )
+        
+        # Generate predictions
+        cat("Generating predictions...\n")
+        all_predictions <- generate_predictions_across_year(
+          start_week = start_week, 
+          end_week = end_week, 
+          weeks_ahead = weeks_ahead
+        )
+        
+        # Store metrics
+        cat("Storing metrics...\n")
+        metrics <- store_model_metrics(
+          all_predictions,
+          model_name = model_name,
+          save_path = getwd()
+        )
+        
+        # Extract overall metrics
+        overall_metrics <- metrics$overall_metrics
+        horizon_metrics <- metrics$horizon_metrics
+        
+        # Calculate mean WIS across all horizons for comparison
+        mean_wis_value <- mean(horizon_metrics$mean_wis)
+        mean_ae_value <- mean(horizon_metrics$mean_ae)
+        mean_rmse <- mean(horizon_metrics$rmse)
+        mean_mae <- mean(horizon_metrics$mae)
+        mean_coverage <- mean(horizon_metrics$coverage_95)
+        
+        # Add to results dataframe
+        results <- rbind(results, data.frame(
+          k_value = k,
+          power_value = power,
+          ntree_value = ntree,
+          mean_wis = mean_wis_value,
+          mean_ae = mean_ae_value,
+          rmse = mean_rmse,
+          mae = mean_mae,
+          coverage_95 = mean_coverage,
+          file_path = metrics$files$horizon_file
+        ))
+        
+        # Save intermediate results
+        write.csv(results, "grid_search_results.csv", row.names = FALSE)
+        
+        # Check if this is the best model so far
+        if (mean_wis_value < best_model$mean_wis) {
+          cat(sprintf("New best model found! Mean WIS: %.4f\n", mean_wis_value))
+          best_model$k_value <- k
+          best_model$power_value <- power
+          best_model$ntree_value <- ntree
+          best_model$mean_wis <- mean_wis_value
+          best_model$post <- post
+          best_model$predictions <- all_predictions
+          
+          # Save the best model
+          saveRDS(post, "best_bart_model.rds")
+          saveRDS(all_predictions, "best_model_predictions.rds")
+        }
+      }
+    }
+  }
+  
+  # Sort results by mean_wis (ascending)
+  results <- results[order(results$mean_wis), ]
+  
+  # Save final results
+  write.csv(results, "final_grid_search_results.csv", row.names = FALSE)
+  
+  # Print the best hyperparameters
+  cat("\n===== GRID SEARCH COMPLETED =====\n")
+  cat(sprintf("Best hyperparameters found:\n"))
+  cat(sprintf("k_value: %.1f\n", best_model$k_value))
+  cat(sprintf("power_value: %.1f\n", best_model$power_value))
+  cat(sprintf("ntree_value: %d\n", best_model$ntree_value))
+  cat(sprintf("Mean WIS: %.4f\n", best_model$mean_wis))
+  
+  return(list(
+    results = results,
+    best_model = best_model
+  ))
+}
+
+# Function to visualize grid search results
+visualize_grid_search_results <- function(results_file = "final_grid_search_results.csv") {
+  # Load results
+  results <- read.csv(results_file)
+  
+  # Create summary plots
+  library(ggplot2)
+  library(gridExtra)
+  
+  # 1. Heatmap of mean_wis for k_value vs power_value (averaged over ntree_value)
+  heatmap_k_power <- results %>%
+    group_by(k_value, power_value) %>%
+    summarize(mean_wis = mean(mean_wis)) %>%
+    ggplot(aes(x = k_value, y = power_value, fill = mean_wis)) +
+    geom_tile() +
+    scale_fill_viridis_c(option = "plasma", direction = -1) +
+    labs(title = "Mean WIS by k and power values",
+         x = "k value", y = "power value") +
+    theme_minimal()
+  
+  # 2. Heatmap of mean_wis for k_value vs ntree_value (averaged over power_value)
+  heatmap_k_ntree <- results %>%
+    group_by(k_value, ntree_value) %>%
+    summarize(mean_wis = mean(mean_wis)) %>%
+    ggplot(aes(x = k_value, y = ntree_value, fill = mean_wis)) +
+    geom_tile() +
+    scale_fill_viridis_c(option = "plasma", direction = -1) +
+    labs(title = "Mean WIS by k and ntree values",
+         x = "k value", y = "ntree value") +
+    theme_minimal()
+  
+  # 3. Heatmap of mean_wis for power_value vs ntree_value (averaged over k_value)
+  heatmap_power_ntree <- results %>%
+    group_by(power_value, ntree_value) %>%
+    summarize(mean_wis = mean(mean_wis)) %>%
+    ggplot(aes(x = power_value, y = ntree_value, fill = mean_wis)) +
+    geom_tile() +
+    scale_fill_viridis_c(option = "plasma", direction = -1) +
+    labs(title = "Mean WIS by power and ntree values",
+         x = "power value", y = "ntree value") +
+    theme_minimal()
+  
+  # 4. Boxplot of mean_wis by ntree_value
+  boxplot_ntree <- ggplot(results, aes(x = factor(ntree_value), y = mean_wis)) +
+    geom_boxplot() +
+    labs(title = "Distribution of Mean WIS by Number of Trees",
+         x = "Number of Trees", y = "Mean WIS") +
+    theme_minimal()
+  
+  # 5. Find the top 5 best models
+  top_models <- results %>%
+    arrange(mean_wis) %>%
+    head(5)
+  
+  # Print the top 5 models
+  print("Top 5 Models by Mean WIS:")
+  print(top_models)
+  
+  # Combine plots
+  grid.arrange(heatmap_k_power, heatmap_k_ntree, heatmap_power_ntree, boxplot_ntree, ncol = 2)
+  
+  # Return the visualization objects
+  return(list(
+    heatmap_k_power = heatmap_k_power,
+    heatmap_k_ntree = heatmap_k_ntree,
+    heatmap_power_ntree = heatmap_power_ntree,
+    boxplot_ntree = boxplot_ntree,
+    top_models = top_models
+  ))
+}
+
 
 # CREATING IMPORTANT VARIABLES #
 climate_data <- api_calls(api_name = "climate")
@@ -1213,30 +1806,40 @@ lambda <- feature_creation() %>%
 
 post <- bart_model()
 
+
 # Generate predictions for all base weeks
-all_predictions <- generate_predictions_across_year(start_week = 4, end_week = 48, weeks_ahead = 4) 
+all_predictions <- generate_predictions_across_year(start_week = 4, end_week = 48, weeks_ahead = 4)
+
 
 # Create and save the animation
-output_format = "mp4"
-create_prediction_animation_year(all_predictions, output_format, glue("BART_2011_tempumid_alllags_tempcomp_humidrisk_andbothcombined_boxcoxtransform_sparse.{output_format}"))
+# output_format = "mp4"
+# create_prediction_animation_year(all_predictions, output_format, glue("BART_2011_tempumid_alllags_tempcomp_humidrisk_andbothcombined_boxcoxtransform_sparse_corrected.{output_format}"))
 
 
 # Plots to analysis:
 plot_full_year()
 plot_var_imp()
-# plot_decomposed_is(all_predictions)
+plot_wis_decomposition_base(all_predictions)
+plot_multi_coverage(all_predictions)
 # plot_pit_histogram(all_predictions)
 # plot_calibration(all_predictions)
 
 # Store the metrics with a descriptive name
 model_metrics <- store_model_metrics(
   all_predictions, 
-  model_name = glue("BART_2011_tempumid_alllags_tempcomp_humidrisk_andbothcombined_boxcoxtransform_sparse"), 
+  model_name = glue("k_0.5_power_1_ntree_200"), 
   save_path = getwd()
 )
 print(model_metrics$horizon_metrics)
 
+# Run the grid search
+results <- grid_search_bart(
+  k_range = seq(0.5, 3, by = 0.5),
+  power_range = seq(0.5, 3, by = 0.5),
+  ntree_range = seq(50, 300, by = 50)
+)
 
+vis <- visualize_grid_search_results()
 
 
 
