@@ -659,7 +659,7 @@ generate_predictions_across_year <- function(start_week, end_week, weeks_ahead) 
         wavg = wavg,
         decay = current_decay
       )
-      
+
       # Make prediction
       prediction <- predict(post, newdata = recursive_data)
       median_prediction <- InvBoxCox(apply(prediction, 2, median), lambda)
@@ -1027,6 +1027,7 @@ plot_calibration <- function(all_predictions, model_name = "BART") {
   return(p)
 }
 
+# Simple metrics by point predicted
 horizon_metrics <- function() {
   horizon_metrics <- all_predictions %>%
     group_by(horizon) %>%
