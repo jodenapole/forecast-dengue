@@ -1,5 +1,0 @@
-"horizon","mean_ae","mean_wis","coverage_95","rmse","mae","mape","model_name"
-1,107.126161030716,281.433781558112,0.977777777777778,147.55056380413,107.126161030716,13.003600719643,"BART_2011_tempumid_alllags_tempcomp_humidrisk_andbothcombined_boxcoxtransform_sparse"
-2,125.509863573735,320.001016592453,0.933333333333333,166.967750435609,125.509863573735,14.1996945488774,"BART_2011_tempumid_alllags_tempcomp_humidrisk_andbothcombined_boxcoxtransform_sparse"
-3,146.053356575213,376.456981959848,0.933333333333333,190.712129491177,146.053356575213,16.6532302446368,"BART_2011_tempumid_alllags_tempcomp_humidrisk_andbothcombined_boxcoxtransform_sparse"
-4,189.275515399355,494.13073840664,0.844444444444444,240.748533453603,189.275515399355,20.9057368390999,"BART_2011_tempumid_alllags_tempcomp_humidrisk_andbothcombined_boxcoxtransform_sparse"

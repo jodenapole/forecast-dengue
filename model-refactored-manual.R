@@ -486,8 +486,8 @@ bart_model <- function () {
   set.seed(7)
   burn <- 13000
   nd <- 5000
-  k_value <- 0.5
-  power_value <- 1
+  k_value <- 2.5
+  power_value <- 0.5
   ntree_value <- 200L
   post <- wbart(x_train, y_train, nskip = burn, ndpost = nd, k=k_value, power = power_value, ntree = ntree_value, sparse = TRUE)
   
@@ -495,7 +495,7 @@ bart_model <- function () {
 }
 
 # Create a function to generate predictions for a range of base weeks
-generate_predictions_across_year <- function(start_week, end_week, weeks_ahead) {
+generate_predictions_across_year <- function(start_week, end_week, weeks_ahead, post) {
   # Create a data frame to store all predictions
   all_predictions <- data.frame()
   
@@ -1020,7 +1020,7 @@ create_prediction_animation_year <- function(all_predictions, output_format, out
 }
 
 # Plot full year
-plot_full_year <- function() {
+plot_full_year <- function(predictions) {
   p <- ggplot() +
     # Plot the actual values as a black line
     geom_line(data = data.frame(week = 1:52, actual = y_test$casos),
@@ -1029,13 +1029,13 @@ plot_full_year <- function() {
                aes(x = week, y = actual), color = "black", size = 2) +
     
     # Add the predictions as red points with confidence intervals
-    geom_ribbon(data = all_predictions, 
+    geom_ribbon(data = predictions, 
                 aes(x = prediction_week, ymin = lower_ci, ymax = upper_ci), 
                 fill = "red", alpha = 0.2) +
-    geom_line(data = all_predictions, 
+    geom_line(data = predictions, 
               aes(x = prediction_week, y = predicted, group = base_week), 
               color = "red", linetype = "dashed", size = 0.5) +
-    geom_point(data = all_predictions, 
+    geom_point(data = predictions, 
                aes(x = prediction_week, y = predicted), 
                color = "red", size = 2) +
     
@@ -1052,9 +1052,9 @@ plot_full_year <- function() {
 }
 
 # Plot var imp
-plot_var_imp <- function() {
+plot_var_imp <- function(model) {
   # Assuming 'post' is your trained BART model and x_train has column names
-  var_imp <- post$varcount.mean
+  var_imp <- model$varcount.mean
   
   # Normalize to percentages
   var_imp_perc <- (var_imp/sum(var_imp)) * 100
@@ -1576,9 +1576,9 @@ visualize_model_metrics <- function(model_name, metrics_dir = NULL) {
 
 # Grid search function for BART model hyperparameter optimization
 grid_search_bart <- function(
-    k_range = seq(0.5, 0.5, by = 0.5),
-    power_range = seq(0.5, 0.5, by = 0.5),
-    ntree_range = seq(50, 50, by = 50),
+    k_range = seq(0.5, 3, by = 0.5),
+    power_range = seq(0.5, 3, by = 0.5),
+    ntree_range = seq(50, 300, by = 50),
     start_week = 4,
     end_week = 48,
     weeks_ahead = 4
@@ -1628,7 +1628,7 @@ grid_search_bart <- function(
         nd <- 5000
         
         cat("Training BART model...\n")
-        post <- wbart(
+        current_post <- wbart(
           x_train, y_train, 
           nskip = burn, 
           ndpost = nd, 
@@ -1643,7 +1643,8 @@ grid_search_bart <- function(
         all_predictions <- generate_predictions_across_year(
           start_week = start_week, 
           end_week = end_week, 
-          weeks_ahead = weeks_ahead
+          weeks_ahead = weeks_ahead,
+          post = current_post
         )
         
         # Store metrics
@@ -1688,11 +1689,11 @@ grid_search_bart <- function(
           best_model$power_value <- power
           best_model$ntree_value <- ntree
           best_model$mean_wis <- mean_wis_value
-          best_model$post <- post
+          best_model$post <- current_post
           best_model$predictions <- all_predictions
           
           # Save the best model
-          saveRDS(post, "best_bart_model.rds")
+          saveRDS(current_post, "best_bart_model.rds")
           saveRDS(all_predictions, "best_model_predictions.rds")
         }
       }
@@ -1804,42 +1805,56 @@ y_test <- feature_creation() %>%
 lambda <- feature_creation() %>%
   .$lambda
 
-post <- bart_model()
-
+# train the model from the ground up
+post_model <- bart_model()
 
 # Generate predictions for all base weeks
-all_predictions <- generate_predictions_across_year(start_week = 4, end_week = 48, weeks_ahead = 4)
+all_predictions <- generate_predictions_across_year(start_week = 4, end_week = 48, weeks_ahead = 4, post_model)
+
 
 
 # Create and save the animation
 # output_format = "mp4"
-# create_prediction_animation_year(all_predictions, output_format, glue("BART_2011_tempumid_alllags_tempcomp_humidrisk_andbothcombined_boxcoxtransform_sparse_corrected.{output_format}"))
+# create_prediction_animation_year(all_predictions, output_format, glue("BART2011_bestparams_tempumidprecip_alllags_tempcomphumidrisk_andbothcombined_boxcoxtransform_sparsetrue.{output_format}"))
 
 
 # Plots to analysis:
-plot_full_year()
-plot_var_imp()
-plot_wis_decomposition_base(all_predictions)
+print(horizon_metrics())
+print(best_metrics)
+
+plot_full_year(all_predictions)
+plot_var_imp(post_model)
+# plot_wis_decomposition_base(all_predictions)
 plot_multi_coverage(all_predictions)
 # plot_pit_histogram(all_predictions)
 # plot_calibration(all_predictions)
 
+
 # Store the metrics with a descriptive name
-model_metrics <- store_model_metrics(
-  all_predictions, 
-  model_name = glue("k_0.5_power_1_ntree_200"), 
-  save_path = getwd()
-)
-print(model_metrics$horizon_metrics)
+# model_metrics <- store_model_metrics(
+#   all_predictions,
+#   model_name = glue("k_2.5_power_0.5_ntree_200_sparsetrue_sqrt"),
+#   save_path = getwd()
+# )
+# print(model_metrics$horizon_metrics)
+
+
 
 # Run the grid search
-results <- grid_search_bart(
-  k_range = seq(0.5, 3, by = 0.5),
-  power_range = seq(0.5, 3, by = 0.5),
-  ntree_range = seq(50, 300, by = 50)
-)
+# results <- grid_search_bart(
+#   k_range = seq(0.5, 3, by = 0.5),
+#   power_range = seq(0.5, 3, by = 0.5),
+#   ntree_range = seq(50, 300, by = 50)
+# )
+# 
+# vis <- visualize_grid_search_results()
 
-vis <- visualize_grid_search_results()
+# best_model trained
+# best_model <- readRDS("best_model/best_bart_model.rds")
 
+# best model predictions
+# best_predictions <- readRDS("best_model/best_model_predictions.rds")
 
+# best model metrics
+# best_metrics <- read.csv("model_metrics/k_2.5_power_0.5_ntree_200_horizon_metrics.csv")
 
