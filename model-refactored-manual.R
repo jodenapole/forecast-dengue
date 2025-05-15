@@ -14,7 +14,8 @@ library(transformr)
 library(parallel)
 library(forecast)
 library(tidyr)
-
+library(ggrepel)
+        
 # Get API key
 API_KEY <- Sys.getenv("MOSQLIMATE_API_KEY")
 
@@ -124,114 +125,18 @@ api_calls <- function(api_name) {
 feature_creation <- function() {
   # Temperature-based competence optimality scale (1-3)
   create_temp_competence_optimality <- function(temp_data) {
-    # Initialize result vector with same length as input
-    competence_scores <- numeric(length(temp_data))
-    
-    # Apply the optimality scale based on temperature ranges
-    for (i in 1:length(temp_data)) {
-      temp <- temp_data[i]
-      
-      # Apply the simplified vector competence optimality scale
-      if ((temp >= 25 && temp <= 32)) {
-        # High transmission efficiency (combined your two highest categories)
-        competence_scores[i] <- 3
-      } else if ((temp >= 23 && temp < 25) || (temp > 32 && temp <= 34)) {
-        # Moderate transmission efficiency
-        competence_scores[i] <- 2
-      } else {
-        # Low transmission efficiency (combined your two lowest categories)
-        competence_scores[i] <- 1
-      }
-    }
-    
-    return(competence_scores)
   }
   
   # Humidity-based risk scale (1-3) 
   create_humidity_risk <- function(humidity_data) {
-    # Initialize result vector with same length as input
-    humidity_scores <- numeric(length(humidity_data))
-    
-    # Apply the risk scale based on humidity ranges
-    for (i in 1:length(humidity_data)) {
-      humidity <- humidity_data[i]
-      
-      # Apply the humidity risk scale
-      if (humidity < 75) {
-        # Low risk
-        humidity_scores[i] <- 1
-      } else if (humidity >= 75 && humidity <= 80) {
-        # Medium risk
-        humidity_scores[i] <- 2
-      } else {
-        # High risk (above 80%)
-        humidity_scores[i] <- 3
-      }
-    }
-    
-    return(humidity_scores)
   }
   
   # Create binary feature for optimal combined conditions
   create_optimal_conditions <- function(temp_competence, humidity_risk) {
-    # Initialize result vector
-    optimal_conditions <- numeric(length(temp_competence))
-    
-    # Set to 1 when both conditions are optimal (both are 3)
-    for (i in 1:length(temp_competence)) {
-      if (temp_competence[i] == 3 && humidity_risk[i] > 1) {
-        optimal_conditions[i] <- 1
-      } else {
-        optimal_conditions[i] <- 0
-      }
-    }
-    
-    return(optimal_conditions)
   }
   
   # Vectorized approach with precipitation included
   fill_lag_columns <- function(data, temp_weekly_avg) {
-    # Define pairs of columns (original column, average column)
-    column_pairs <- list(
-      list("temp_med_lag1", "avg_tempmed_lag1"),
-      list("temp_med_lag2", "avg_tempmed_lag2"),
-      list("temp_med_lag3", "avg_tempmed_lag3"),
-      list("temp_med_lag4", "avg_tempmed_lag4"),
-      list("umid_med_lag1", "avg_umidmed_lag1"),
-      list("umid_med_lag2", "avg_umidmed_lag2"),
-      list("umid_med_lag3", "avg_umidmed_lag3"),
-      list("umid_med_lag4", "avg_umidmed_lag4"),
-      list("precip_tot_lag1", "avg_precip_tot_lag1"),
-      list("precip_tot_lag2", "avg_precip_tot_lag2"),
-      list("precip_tot_lag3", "avg_precip_tot_lag3"),
-      list("precip_tot_lag4", "avg_precip_tot_lag4")
-    )
-    
-    # Create a lookup table for each weekly average column
-    lookup_tables <- list()
-    for (col_pair in column_pairs) {
-      avg_col <- col_pair[[2]]
-      lookup_tables[[avg_col]] <- setNames(
-        temp_weekly_avg[[avg_col]],
-        temp_weekly_avg$week_of_year
-      )
-    }
-    
-    # For each column pair
-    for (col_pair in column_pairs) {
-      col <- col_pair[[1]]
-      avg_col <- col_pair[[2]]
-      
-      # Find rows with NA values
-      na_rows <- which(is.na(data[[col]]))
-      
-      if (length(na_rows) > 0) {
-        # Replace NA values with the corresponding week's average
-        data[[col]][na_rows] <- lookup_tables[[avg_col]][as.character(data$week_of_year[na_rows])]
-      }
-    }
-    
-    return(data)
   }
   
   
@@ -560,169 +465,460 @@ generate_predictions_across_year <- function(start_week, end_week, weeks_ahead, 
     
     # Get actual values for comparison
     actual_values <- y_test$casos[(week_base + 1):(week_base + weeks_ahead)]
+
+    # Temperature volatility (using 4-week window)
+    current_temp_volatility <- sd(c(
+      y_test$temp_med_avg[week_base],
+      y_test$temp_med_avg[week_base - 1],
+      y_test$temp_med_avg[week_base - 2],
+      y_test$temp_med_avg[week_base - 3]
+    ))
+    
+    # Get favorable_weeks_count from test data
+    current_favorable_weeks_count <- y_test$favorable_weeks_count[week_base]
+    
+    # Get dry_then_wet from test data
+    current_dry_then_wet <- y_test$dry_then_wet[week_base]
+    
+    # Get climate_state_change from test data
+    current_climate_state_change <- y_test$climate_state_change[week_base]
     
     # Generate predictions for each week ahead
     for (week in 1:weeks_ahead) {
       # Set up lag values based on which week we're predicting
       if (week == 1) {
-        current_temp_med_lag1 <- y_test$temp_med_avg[week_base]
-        current_temp_med_lag2 <- y_test$temp_med_avg[week_base]
-        current_temp_med_lag3 <- y_test$temp_med_avg[week_base]
-        current_temp_med_lag4 <- y_test$temp_med_avg[week_base]
-        current_umid_med_lag1 <- y_test$umid_med_avg[week_base]
-        current_umid_med_lag2 <- y_test$umid_med_avg[week_base]
-        current_umid_med_lag3 <- y_test$umid_med_avg[week_base]
-        current_umid_med_lag4 <- y_test$umid_med_avg[week_base]
-        current_precip_tot_lag1 <- avg_precip_lag
-        current_precip_tot_lag2 <- avg_precip_lag
-        current_precip_tot_lag3 <- avg_precip_lag
-        current_precip_tot_lag4 <- avg_precip_lag
-        current_temp_competence_optimality <- y_test$temp_competence_optimality[week_base]
-        current_humidity_risk <- y_test$humidity_risk[week_base]
-        current_temp_competence_humidty_risk <- y_test$temp_competence_humidty_risk[week_base]
-        current_optimal_conditions <- y_test$optimal_conditions[week_base]
         current_lag1 <- v1
         current_lag2 <- v2
         current_lag3 <- v3
         current_lag4 <- v4
-        mov_sd <- sd(c(current_lag1, current_lag2, current_lag3))
-        avg <- mean(c(current_lag1, current_lag2, current_lag3))
-        wavg <- ((current_lag1 * 3) + (current_lag2 * 2) + (current_lag3)) / 6
+        
         if (current_lag1 < current_lag2 && current_lag2 < current_lag3) {
           declines <- c((current_lag1 - current_lag2) / current_lag2,
                         (current_lag2 - current_lag3) / current_lag3)
           current_decay <- mean(declines)
-        } else {
-          current_decay <- 0
-        }
-        week_number <- y_test$week_number[week_base + week]
-      } else if (week == 2) {
+        } else { current_decay <- 0 }
+        
         current_temp_med_lag1 <- y_test$temp_med_avg[week_base]
         current_temp_med_lag2 <- y_test$temp_med_avg[week_base]
         current_temp_med_lag3 <- y_test$temp_med_avg[week_base]
         current_temp_med_lag4 <- y_test$temp_med_avg[week_base]
+        
         current_umid_med_lag1 <- y_test$umid_med_avg[week_base]
         current_umid_med_lag2 <- y_test$umid_med_avg[week_base]
         current_umid_med_lag3 <- y_test$umid_med_avg[week_base]
         current_umid_med_lag4 <- y_test$umid_med_avg[week_base]
+        
         current_precip_tot_lag1 <- avg_precip_lag
         current_precip_tot_lag2 <- avg_precip_lag
         current_precip_tot_lag3 <- avg_precip_lag
         current_precip_tot_lag4 <- avg_precip_lag
+        
         current_temp_competence_optimality <- y_test$temp_competence_optimality[week_base]
         current_humidity_risk <- y_test$humidity_risk[week_base]
         current_temp_competence_humidty_risk <- y_test$temp_competence_humidty_risk[week_base]
+        
+        mov_sd <- sd(c(current_lag1, current_lag2, current_lag3))
+        avg <- mean(c(current_lag1, current_lag2, current_lag3))
+        wavg <- ((current_lag1 * 3) + (current_lag2 * 2) + (current_lag3)) / 6
+        
+        if (current_lag2 > 0) {
+          current_lag1_growth_rate <- (current_lag1 - current_lag2) / current_lag2
+        } else { current_lag1_growth_rate <- 0 }
+        
+        if (current_lag1 > current_lag2 && current_lag2 > current_lag3 && current_lag3 > current_lag4) {
+          current_lag1_vs_lag4_growth <- 1
+        } else { current_lag1_vs_lag4_growth <- 0 }
+        
+        current_log_lag_growth <- log((current_lag1 + 1)/(current_lag2 + 1))
+        if (current_lag1 > current_lag2 && current_lag2 > current_lag3 && current_lag3 > current_lag4) {
+          current_lag_sustained_growth <- 1
+        } else { current_lag_sustained_growth <- 0 }
+        
+        current_lag_growth_accel <- (current_lag1 - current_lag2) - (current_lag2 - current_lag3)
+        current_avg_growth_rate <- (avg - (mean(c(current_lag2, current_lag3, current_lag4)))) / (mean(c(current_lag2, current_lag3, current_lag4)))
+        current_temp_volatility <- current_temp_volatility
+        current_favorable_weeks_count <- current_favorable_weeks_count
+        current_dry_then_wet <- current_dry_then_wet
+        current_climate_state_change <- current_climate_state_change
+        
+        current_climate_change_context <- y_test$climate_change_context[week_base]
+        current_climate_improving <- y_test$climate_improving[week_base]
+        current_climate_worsening <- y_test$climate_worsening[week_base]
+        
+        current_is_summer <- y_test$is_summer[week_base + week]
+        current_is_autumn <- y_test$is_autumn[week_base + week]
+        current_is_winter <- y_test$is_winter[week_base + week]
+        current_is_spring <- y_test$is_spring[week_base + week]
+        
+        current_temp_humid_risk_summer <- current_temp_competence_humidty_risk * current_is_summer
+        current_temp_humid_risk_autumn <- current_temp_competence_humidty_risk * current_is_autumn
+        current_temp_humid_risk_winter <- current_temp_competence_humidty_risk * current_is_winter
+        current_temp_humid_risk_spring <- current_temp_competence_humidty_risk * current_is_spring
+        
+        current_casos_lag1_summer <- current_lag1 * current_is_summer
+        current_casos_lag1_autumn <- current_lag1 * current_is_autumn
+        current_casos_lag1_winter <- current_lag1 * current_is_winter
+        current_casos_lag1_spring <- current_lag1 * current_is_spring
+        
+        current_near_season_change <- y_test$near_season_change[week_base + week]
+        current_spring_to_summer_transition <- y_test$spring_to_summer_transition[week_base + week]
+        
+        current_temp_humid_risk_stability <- y_test$temp_humid_risk_stability[week_base]
+        current_temp_humid_risk_trend <- y_test$temp_humid_risk_trend[week_base]
+        
+        current_risk_vs_8wk_avg <- y_test$risk_vs_8wk_avg[week_base]
+        current_risk_seasonal_zscore <- y_test$risk_seasonal_zscore[week_base]
+        
         current_optimal_conditions <- y_test$optimal_conditions[week_base]
+        week_number <- y_test$week_number[week_base + week]
+        
+      } else if (week == 2) {
         current_lag1 <- mean_predictions_2023[1]
         current_lag2 <- v1
         current_lag3 <- v2
         current_lag4 <- v3
-        mov_sd <- sd(c(current_lag1, current_lag2, current_lag3))
-        avg <- mean(c(current_lag1, current_lag2, current_lag3))
-        wavg <- ((current_lag1 * 3) + (current_lag2 * 2) + (current_lag3)) / 6
+        
         if (current_lag1 < current_lag2 && current_lag2 < current_lag3) {
           declines <- c((current_lag1 - current_lag2) / current_lag2,
                         (current_lag2 - current_lag3) / current_lag3)
           current_decay <- mean(declines)
-        } else {
-          current_decay <- 0
-        }
-        week_number <- y_test$week_number[week_base + week]
-      } else if (week == 3) {
+        } else { current_decay <- 0 }
+        
         current_temp_med_lag1 <- y_test$temp_med_avg[week_base]
         current_temp_med_lag2 <- y_test$temp_med_avg[week_base]
         current_temp_med_lag3 <- y_test$temp_med_avg[week_base]
         current_temp_med_lag4 <- y_test$temp_med_avg[week_base]
+        
         current_umid_med_lag1 <- y_test$umid_med_avg[week_base]
         current_umid_med_lag2 <- y_test$umid_med_avg[week_base]
         current_umid_med_lag3 <- y_test$umid_med_avg[week_base]
         current_umid_med_lag4 <- y_test$umid_med_avg[week_base]
+        
         current_precip_tot_lag1 <- avg_precip_lag
         current_precip_tot_lag2 <- avg_precip_lag
         current_precip_tot_lag3 <- avg_precip_lag
         current_precip_tot_lag4 <- avg_precip_lag
+        
         current_temp_competence_optimality <- y_test$temp_competence_optimality[week_base]
         current_humidity_risk <- y_test$humidity_risk[week_base]
         current_temp_competence_humidty_risk <- y_test$temp_competence_humidty_risk[week_base]
         current_optimal_conditions <- y_test$optimal_conditions[week_base]
+        
+        current_climate_change_context <- y_test$climate_change_context[week_base]
+        current_climate_improving <- y_test$climate_improving[week_base]
+        current_climate_worsening <- y_test$climate_worsening[week_base]
+        
+        current_is_summer <- y_test$is_summer[week_base + week]
+        current_is_autumn <- y_test$is_autumn[week_base + week]
+        current_is_winter <- y_test$is_winter[week_base + week]
+        current_is_spring <- y_test$is_spring[week_base + week]
+        
+        current_temp_humid_risk_summer <- current_temp_competence_humidty_risk * current_is_summer
+        current_temp_humid_risk_autumn <- current_temp_competence_humidty_risk * current_is_autumn
+        current_temp_humid_risk_winter <- current_temp_competence_humidty_risk * current_is_winter
+        current_temp_humid_risk_spring <- current_temp_competence_humidty_risk * current_is_spring
+        
+        current_casos_lag1_summer <- current_lag1 * current_is_summer
+        current_casos_lag1_autumn <- current_lag1 * current_is_autumn
+        current_casos_lag1_winter <- current_lag1 * current_is_winter
+        current_casos_lag1_spring <- current_lag1 * current_is_spring
+        
+        current_near_season_change <- y_test$near_season_change[week_base + week]
+        current_spring_to_summer_transition <- y_test$spring_to_summer_transition[week_base + week]
+        
+        current_temp_humid_risk_stability <- y_test$temp_humid_risk_stability[week_base]
+        current_temp_humid_risk_trend <- y_test$temp_humid_risk_trend[week_base]
+        
+        current_risk_vs_8wk_avg <- y_test$risk_vs_8wk_avg[week_base]
+        current_risk_seasonal_zscore <- y_test$risk_seasonal_zscore[week_base]
+        
+        mov_sd <- sd(c(current_lag1, current_lag2, current_lag3))
+        avg <- mean(c(current_lag1, current_lag2, current_lag3))
+        wavg <- ((current_lag1 * 3) + (current_lag2 * 2) + (current_lag3)) / 6
+        
+        if (current_lag2 > 0) {
+          current_lag1_growth_rate <- (current_lag1 - current_lag2) / current_lag2
+        } else { current_lag1_growth_rate <- 0 }
+        
+        if (current_lag1 > current_lag2 && current_lag2 > current_lag3 && current_lag3 > current_lag4) {
+          current_lag1_vs_lag4_growth <- 1
+        } else { current_lag1_vs_lag4_growth <- 0 }
+        
+        current_log_lag_growth <- log((current_lag1 + 1)/(current_lag2 + 1))
+        if (current_lag1 > current_lag2 && current_lag2 > current_lag3 && current_lag3 > current_lag4) {
+          current_lag_sustained_growth <- 1
+        } else { current_lag_sustained_growth <- 0 }
+        
+        current_lag_growth_accel <- (current_lag1 - current_lag2) - (current_lag2 - current_lag3)
+        current_avg_growth_rate <- (avg - (mean(c(current_lag2, current_lag3, current_lag4)))) / (mean(c(current_lag2, current_lag3, current_lag4)))
+        current_temp_volatility <- current_temp_volatility
+        current_favorable_weeks_count <- ifelse(current_favorable_weeks_count > 0, 
+                                                current_favorable_weeks_count + 1, 0)
+        current_dry_then_wet <- 0  # Reset since it's a specific pattern
+        current_climate_state_change <- 0  # Assume no change for future weeks
+        
+        current_optimal_conditions <- y_test$optimal_conditions[week_base]
+        week_number <- y_test$week_number[week_base + week]
+      } else if (week == 3) {
         current_lag1 <- mean_predictions_2023[2]
         current_lag2 <- mean_predictions_2023[1]
         current_lag3 <- v1
         current_lag4 <- v2
-        mov_sd <- sd(c(current_lag1, current_lag2, current_lag3))
-        avg <- mean(c(current_lag1, current_lag2, current_lag3))
-        wavg <- ((current_lag1 * 3) + (current_lag2 * 2) + (current_lag3)) / 6
+        
         if (current_lag1 < current_lag2 && current_lag2 < current_lag3) {
           declines <- c((current_lag1 - current_lag2) / current_lag2,
                         (current_lag2 - current_lag3) / current_lag3)
           current_decay <- mean(declines)
-        } else {
-          current_decay <- 0
-        }
-        week_number <- y_test$week_number[week_base + week]
-      } else if (week == 4) {
+        } else { current_decay <- 0 }
+        
         current_temp_med_lag1 <- y_test$temp_med_avg[week_base]
         current_temp_med_lag2 <- y_test$temp_med_avg[week_base]
         current_temp_med_lag3 <- y_test$temp_med_avg[week_base]
         current_temp_med_lag4 <- y_test$temp_med_avg[week_base]
+        
         current_umid_med_lag1 <- y_test$umid_med_avg[week_base]
         current_umid_med_lag2 <- y_test$umid_med_avg[week_base]
         current_umid_med_lag3 <- y_test$umid_med_avg[week_base]
         current_umid_med_lag4 <- y_test$umid_med_avg[week_base]
+        
         current_precip_tot_lag1 <- avg_precip_lag
         current_precip_tot_lag2 <- avg_precip_lag
         current_precip_tot_lag3 <- avg_precip_lag
         current_precip_tot_lag4 <- avg_precip_lag
+        
         current_temp_competence_optimality <- y_test$temp_competence_optimality[week_base]
         current_humidity_risk <- y_test$humidity_risk[week_base]
         current_temp_competence_humidty_risk <- y_test$temp_competence_humidty_risk[week_base]
         current_optimal_conditions <- y_test$optimal_conditions[week_base]
+        
+        current_climate_change_context <- y_test$climate_change_context[week_base]
+        current_climate_improving <- y_test$climate_improving[week_base]
+        current_climate_worsening <- y_test$climate_worsening[week_base]
+        
+        current_is_summer <- y_test$is_summer[week_base + week]
+        current_is_autumn <- y_test$is_autumn[week_base + week]
+        current_is_winter <- y_test$is_winter[week_base + week]
+        current_is_spring <- y_test$is_spring[week_base + week]
+        
+        current_temp_humid_risk_summer <- current_temp_competence_humidty_risk * current_is_summer
+        current_temp_humid_risk_autumn <- current_temp_competence_humidty_risk * current_is_autumn
+        current_temp_humid_risk_winter <- current_temp_competence_humidty_risk * current_is_winter
+        current_temp_humid_risk_spring <- current_temp_competence_humidty_risk * current_is_spring
+        
+        current_casos_lag1_summer <- current_lag1 * current_is_summer
+        current_casos_lag1_autumn <- current_lag1 * current_is_autumn
+        current_casos_lag1_winter <- current_lag1 * current_is_winter
+        current_casos_lag1_spring <- current_lag1 * current_is_spring
+
+        current_near_season_change <- y_test$near_season_change[week_base + week]
+        current_spring_to_summer_transition <- y_test$spring_to_summer_transition[week_base + week]
+        
+        current_temp_humid_risk_stability <- y_test$temp_humid_risk_stability[week_base]
+        current_temp_humid_risk_trend <- y_test$temp_humid_risk_trend[week_base]
+        
+        current_risk_vs_8wk_avg <- y_test$risk_vs_8wk_avg[week_base]
+        current_risk_seasonal_zscore <- y_test$risk_seasonal_zscore[week_base]
+        
+        mov_sd <- sd(c(current_lag1, current_lag2, current_lag3))
+        avg <- mean(c(current_lag1, current_lag2, current_lag3))
+        wavg <- ((current_lag1 * 3) + (current_lag2 * 2) + (current_lag3)) / 6
+        
+        if (current_lag2 > 0) {
+          current_lag1_growth_rate <- (current_lag1 - current_lag2) / current_lag2
+        } else { current_lag1_growth_rate <- 0 }
+        
+        if (current_lag1 > current_lag2 && current_lag2 > current_lag3 && current_lag3 > current_lag4) {
+          current_lag1_vs_lag4_growth <- 1
+        } else { current_lag1_vs_lag4_growth <- 0 }
+        
+        current_log_lag_growth <- log((current_lag1 + 1)/(current_lag2 + 1))
+        if (current_lag1 > current_lag2 && current_lag2 > current_lag3 && current_lag3 > current_lag4) {
+          current_lag_sustained_growth <- 1
+        } else { current_lag_sustained_growth <- 0 }
+        
+        current_lag_growth_accel <- (current_lag1 - current_lag2) - (current_lag2 - current_lag3)
+        current_avg_growth_rate <- (avg - (mean(c(current_lag2, current_lag3, current_lag4)))) / (mean(c(current_lag2, current_lag3, current_lag4)))
+        current_temp_volatility <- current_temp_volatility
+        current_favorable_weeks_count <- ifelse(current_favorable_weeks_count > 0, 
+                                                current_favorable_weeks_count + 2, 0)
+        current_dry_then_wet <- 0
+        current_climate_state_change <- 0
+        
+        current_optimal_conditions <- y_test$optimal_conditions[week_base]
+        week_number <- y_test$week_number[week_base + week]
+      } else if (week == 4) {
         current_lag1 <- mean_predictions_2023[3]
         current_lag2 <- mean_predictions_2023[2]
         current_lag3 <- mean_predictions_2023[1]
         current_lag4 <- v1
-        mov_sd <- sd(c(current_lag1, current_lag2, current_lag3))
-        avg <- mean(c(current_lag1, current_lag2, current_lag3))
-        wavg <- ((current_lag1 * 3) + (current_lag2 * 2) + (current_lag3)) / 6
+        
         if (current_lag1 < current_lag2 && current_lag2 < current_lag3) {
           declines <- c((current_lag1 - current_lag2) / current_lag2,
                         (current_lag2 - current_lag3) / current_lag3)
           current_decay <- mean(declines)
-        } else {
-          current_decay <- 0
-        }
-        week_number <- y_test$week_number[week_base + week]
-      } else if (week > 4) {
+        } else { current_decay <- 0 }
+        
         current_temp_med_lag1 <- y_test$temp_med_avg[week_base]
         current_temp_med_lag2 <- y_test$temp_med_avg[week_base]
         current_temp_med_lag3 <- y_test$temp_med_avg[week_base]
         current_temp_med_lag4 <- y_test$temp_med_avg[week_base]
+        
         current_umid_med_lag1 <- y_test$umid_med_avg[week_base]
         current_umid_med_lag2 <- y_test$umid_med_avg[week_base]
         current_umid_med_lag3 <- y_test$umid_med_avg[week_base]
         current_umid_med_lag4 <- y_test$umid_med_avg[week_base]
+        
         current_precip_tot_lag1 <- avg_precip_lag
         current_precip_tot_lag2 <- avg_precip_lag
         current_precip_tot_lag3 <- avg_precip_lag
         current_precip_tot_lag4 <- avg_precip_lag
+        
         current_temp_competence_optimality <- y_test$temp_competence_optimality[week_base]
         current_humidity_risk <- y_test$humidity_risk[week_base]
         current_temp_competence_humidty_risk <- y_test$temp_competence_humidty_risk[week_base]
         current_optimal_conditions <- y_test$optimal_conditions[week_base]
+        
+        current_climate_change_context <- y_test$climate_change_context[week_base]
+        current_climate_improving <- y_test$climate_improving[week_base]
+        current_climate_worsening <- y_test$climate_worsening[week_base]
+        
+        current_is_summer <- y_test$is_summer[week_base + week]
+        current_is_autumn <- y_test$is_autumn[week_base + week]
+        current_is_winter <- y_test$is_winter[week_base + week]
+        current_is_spring <- y_test$is_spring[week_base + week]
+        
+        current_temp_humid_risk_summer <- current_temp_competence_humidty_risk * current_is_summer
+        current_temp_humid_risk_autumn <- current_temp_competence_humidty_risk * current_is_autumn
+        current_temp_humid_risk_winter <- current_temp_competence_humidty_risk * current_is_winter
+        current_temp_humid_risk_spring <- current_temp_competence_humidty_risk * current_is_spring
+        
+        current_casos_lag1_summer <- current_lag1 * current_is_summer
+        current_casos_lag1_autumn <- current_lag1 * current_is_autumn
+        current_casos_lag1_winter <- current_lag1 * current_is_winter
+        current_casos_lag1_spring <- current_lag1 * current_is_spring
+
+        current_near_season_change <- y_test$near_season_change[week_base + week]
+        current_spring_to_summer_transition <- y_test$spring_to_summer_transition[week_base + week]
+        
+        current_temp_humid_risk_stability <- y_test$temp_humid_risk_stability[week_base]
+        current_temp_humid_risk_trend <- y_test$temp_humid_risk_trend[week_base]
+        
+        current_risk_vs_8wk_avg <- y_test$risk_vs_8wk_avg[week_base]
+        current_risk_seasonal_zscore <- y_test$risk_seasonal_zscore[week_base]
+        
+        mov_sd <- sd(c(current_lag1, current_lag2, current_lag3))
+        avg <- mean(c(current_lag1, current_lag2, current_lag3))
+        wavg <- ((current_lag1 * 3) + (current_lag2 * 2) + (current_lag3)) / 6
+        
+        if (current_lag2 > 0) {
+          current_lag1_growth_rate <- (current_lag1 - current_lag2) / current_lag2
+        } else { current_lag1_growth_rate <- 0 }
+        
+        if (current_lag1 > current_lag2 && current_lag2 > current_lag3 && current_lag3 > current_lag4) {
+          current_lag1_vs_lag4_growth <- 1
+        } else { current_lag1_vs_lag4_growth <- 0 }
+        
+        current_log_lag_growth <- log((current_lag1 + 1)/(current_lag2 + 1))
+        if (current_lag1 > current_lag2 && current_lag2 > current_lag3 && current_lag3 > current_lag4) {
+          current_lag_sustained_growth <- 1
+        } else { current_lag_sustained_growth <- 0 }
+        
+        current_lag_growth_accel <- (current_lag1 - current_lag2) - (current_lag2 - current_lag3)
+        current_avg_growth_rate <- (avg - (mean(c(current_lag2, current_lag3, current_lag4)))) / (mean(c(current_lag2, current_lag3, current_lag4)))
+        current_temp_volatility <- current_temp_volatility
+        current_favorable_weeks_count <- ifelse(current_favorable_weeks_count > 0, 
+                                                current_favorable_weeks_count + 3, 0)
+        current_dry_then_wet <- 0
+        current_climate_state_change <- 0
+        
+        current_optimal_conditions <- y_test$optimal_conditions[week_base]
+        week_number <- y_test$week_number[week_base + week]
+      } else if (week > 4) {
         current_lag1 <- mean_predictions_2023[4]
         current_lag2 <- mean_predictions_2023[3]
         current_lag3 <- mean_predictions_2023[2]
         current_lag4 <- mean_predictions_2023[1]
-        mov_sd <- sd(c(current_lag1, current_lag2, current_lag3))
-        avg <- mean(c(current_lag1, current_lag2, current_lag3))
-        wavg <- ((current_lag1 * 3) + (current_lag2 * 2) + (current_lag3)) / 6
+        
         if (current_lag1 < current_lag2 && current_lag2 < current_lag3) {
           declines <- c((current_lag1 - current_lag2) / current_lag2,
                         (current_lag2 - current_lag3) / current_lag3)
           current_decay <- mean(declines)
-        } else {
-          current_decay <- 0
-        }
+        } else { current_decay <- 0 }
+        
+        current_temp_med_lag1 <- y_test$temp_med_avg[week_base]
+        current_temp_med_lag2 <- y_test$temp_med_avg[week_base]
+        current_temp_med_lag3 <- y_test$temp_med_avg[week_base]
+        current_temp_med_lag4 <- y_test$temp_med_avg[week_base]
+        
+        current_umid_med_lag1 <- y_test$umid_med_avg[week_base]
+        current_umid_med_lag2 <- y_test$umid_med_avg[week_base]
+        current_umid_med_lag3 <- y_test$umid_med_avg[week_base]
+        current_umid_med_lag4 <- y_test$umid_med_avg[week_base]
+        
+        current_precip_tot_lag1 <- avg_precip_lag
+        current_precip_tot_lag2 <- avg_precip_lag
+        current_precip_tot_lag3 <- avg_precip_lag
+        current_precip_tot_lag4 <- avg_precip_lag
+        
+        current_temp_competence_optimality <- y_test$temp_competence_optimality[week_base]
+        current_humidity_risk <- y_test$humidity_risk[week_base]
+        current_temp_competence_humidty_risk <- y_test$temp_competence_humidty_risk[week_base]
+        current_optimal_conditions <- y_test$optimal_conditions[week_base]
+        
+        current_climate_change_context <- y_test$climate_change_context[week_base]
+        current_climate_improving <- y_test$climate_improving[week_base]
+        current_climate_worsening <- y_test$climate_worsening[week_base]
+        
+        current_is_summer <- y_test$is_summer[week_base + week]
+        current_is_autumn <- y_test$is_autumn[week_base + week]
+        current_is_winter <- y_test$is_winter[week_base + week]
+        current_is_spring <- y_test$is_spring[week_base + week]
+        
+        current_temp_humid_risk_summer <- current_temp_competence_humidty_risk * current_is_summer
+        current_temp_humid_risk_autumn <- current_temp_competence_humidty_risk * current_is_autumn
+        current_temp_humid_risk_winter <- current_temp_competence_humidty_risk * current_is_winter
+        current_temp_humid_risk_spring <- current_temp_competence_humidty_risk * current_is_spring
+        
+        current_casos_lag1_summer <- current_lag1 * current_is_summer
+        current_casos_lag1_autumn <- current_lag1 * current_is_autumn
+        current_casos_lag1_winter <- current_lag1 * current_is_winter
+        current_casos_lag1_spring <- current_lag1 * current_is_spring
+        
+        current_near_season_change <- y_test$near_season_change[week_base + week]
+        current_spring_to_summer_transition <- y_test$spring_to_summer_transition[week_base + week]
+        
+        current_temp_humid_risk_stability <- y_test$temp_humid_risk_stability[week_base]
+        current_temp_humid_risk_trend <- y_test$temp_humid_risk_trend[week_base]
+        
+        current_risk_vs_8wk_avg <- y_test$risk_vs_8wk_avg[week_base]
+        current_risk_seasonal_zscore <- y_test$risk_seasonal_zscore[week_base]
+        
+        mov_sd <- sd(c(current_lag1, current_lag2, current_lag3))
+        avg <- mean(c(current_lag1, current_lag2, current_lag3))
+        wavg <- ((current_lag1 * 3) + (current_lag2 * 2) + (current_lag3)) / 6
+
+        if (current_lag2 > 0) {
+          current_lag1_growth_rate <- (current_lag1 - current_lag2) / current_lag2
+        } else { current_lag1_growth_rate <- 0 }
+        
+        if (current_lag1 > current_lag2 && current_lag2 > current_lag3 && current_lag3 > current_lag4) {
+          current_lag1_vs_lag4_growth <- 1
+        } else { current_lag1_vs_lag4_growth <- 0 }
+        
+        current_log_lag_growth <- log((current_lag1 + 1)/(current_lag2 + 1))
+        if (current_lag1 > current_lag2 && current_lag2 > current_lag3 && current_lag3 > current_lag4) {
+          current_lag_sustained_growth <- 1
+        } else { current_lag_sustained_growth <- 0 }
+        
+        current_lag_growth_accel <- (current_lag1 - current_lag2) - (current_lag2 - current_lag3)
+        current_avg_growth_rate <- (avg - (mean(c(current_lag2, current_lag3, current_lag4)))) / (mean(c(current_lag2, current_lag3, current_lag4)))
+        current_temp_volatility <- current_temp_volatility
+        current_favorable_weeks_count <- ifelse(current_favorable_weeks_count > 0, 
+                                                current_favorable_weeks_count + week - 1, 0)
+        current_dry_then_wet <- 0
+        current_climate_state_change <- 0
+        
+        current_optimal_conditions <- y_test$optimal_conditions[week_base]
         week_number <- y_test$week_number[week_base + week]
       }
       
@@ -748,6 +944,36 @@ generate_predictions_across_year <- function(start_week, end_week, weeks_ahead, 
         humidity_risk = current_humidity_risk,
         temp_competence_humidty_risk = current_temp_competence_humidty_risk,
         # optimal_conditions = current_optimal_conditions,
+        # lag1_growth_rate = current_lag1_growth_rate,
+        # lag1_vs_lag4_growth = current_lag1_vs_lag4_growth,
+        # log_lag_growth = current_log_lag_growth,
+        # lag_sustained_growth = current_lag_sustained_growth,
+        # lag_growth_accel = current_lag_growth_accel,
+        # avg_growth_rate = current_avg_growth_rate,
+        # temp_volatility = current_temp_volatility,
+        # favorable_weeks_count = current_favorable_weeks_count,
+        # dry_then_wet = current_dry_then_wet,
+        # is_summer <- current_is_summer,
+        # is_autumn <- current_is_autumn,
+        # is_winter <- current_is_winter,
+        # is_spring <- current_is_spring,
+        # climate_change_context = current_climate_change_context,
+        # climate_improving = current_climate_improving,
+        # climate_worsening = current_climate_worsening,
+        # temp_humid_risk_summer = current_temp_humid_risk_summer,
+        # temp_humid_risk_autumn = current_temp_humid_risk_autumn,
+        # temp_humid_risk_winter = current_temp_humid_risk_winter,
+        # temp_humid_risk_spring = current_temp_humid_risk_spring,
+        # casos_lag1_summer = current_casos_lag1_summer,
+        # casos_lag1_autumn = current_casos_lag1_autumn,
+        # casos_lag1_winter = current_casos_lag1_winter, 
+        # casos_lag1_spring = current_casos_lag1_spring,
+        # near_season_change = current_near_season_change,
+        # spring_to_summer_transition = current_spring_to_summer_transition,
+        # temp_humid_risk_stability = current_temp_humid_risk_stability,
+        # temp_humid_risk_trend = current_temp_humid_risk_trend,
+        # risk_vs_8wk_avg = current_risk_vs_8wk_avg,
+        # risk_seasonal_zscore = current_risk_seasonal_zscore,
         sin_year = sin(2 * pi * week_number/52),
         cos_year = cos(2 * pi * week_number/52),
         casoslag1_mov_sd = mov_sd,
@@ -1811,11 +2037,9 @@ post_model <- bart_model()
 # Generate predictions for all base weeks
 all_predictions <- generate_predictions_across_year(start_week = 4, end_week = 48, weeks_ahead = 4, post_model)
 
-
-
 # Create and save the animation
 # output_format = "mp4"
-# create_prediction_animation_year(all_predictions, output_format, glue("BART2011_bestparams_tempumidprecip_alllags_tempcomphumidrisk_andbothcombined_boxcoxtransform_sparsetrue.{output_format}"))
+# create_prediction_animation_year(all_predictions, output_format, glue("k_2.5_power_0.5_ntree_200_sparsefalse_evenmoreexpandedfeatures.{output_format}"))
 
 
 # Plots to analysis:
@@ -1825,17 +2049,17 @@ print(best_metrics)
 plot_full_year(all_predictions)
 plot_var_imp(post_model)
 # plot_wis_decomposition_base(all_predictions)
-plot_multi_coverage(all_predictions)
+# plot_multi_coverage(all_predictions)
 # plot_pit_histogram(all_predictions)
 # plot_calibration(all_predictions)
 
 
 # Store the metrics with a descriptive name
-# model_metrics <- store_model_metrics(
-#   all_predictions,
-#   model_name = glue("k_2.5_power_0.5_ntree_200_sparsetrue_sqrt"),
-#   save_path = getwd()
-# )
+model_metrics <- store_model_metrics(
+  all_predictions,
+  model_name = glue("k_2.5_power_0.5_ntree_200_sparsefalse_evenmoreexpandedfeatures"),
+  save_path = getwd()
+)
 # print(model_metrics$horizon_metrics)
 
 
@@ -1858,3 +2082,322 @@ plot_multi_coverage(all_predictions)
 # best model metrics
 # best_metrics <- read.csv("model_metrics/k_2.5_power_0.5_ntree_200_horizon_metrics.csv")
 
+
+# Function to analyze why the model is overpredicting at specific base weeks
+analyze_problem_weeks <- function(post, base_weeks = c(31), weeks_ahead = 4) {
+  # Store results
+  analysis_results <- list()
+  
+  # Overall variable importance from the BART model
+  var_imp <- post$varcount.mean
+  var_imp_perc <- (var_imp/sum(var_imp)) * 100
+  
+  # Set column names to match training data
+  names(var_imp_perc) <- c(
+    "casos_lag1", "casos_lag2", "casos_lag3", "casos_lag4",
+    "temp_med_lag1", "temp_med_lag2", "temp_med_lag3", "temp_med_lag4",
+    "umid_med_lag1", "umid_med_lag2", "umid_med_lag3", "umid_med_lag4",
+    "precip_tot_lag1", "precip_tot_lag2", "precip_tot_lag3", "precip_tot_lag4",
+    "temp_competence_optimality", "humidity_risk", "temp_competence_humidty_risk",
+    "sin_year", "cos_year", "casoslag1_mov_sd", "avg", "wavg", "decay",
+    "temp_volatility", "favorable_weeks_count", "dry_then_wet", "climate_state_change"
+  )
+  
+  # For each problematic base week
+  for (base_week in base_weeks) {
+    cat(sprintf("\n=== Analyzing base week %d ===\n", base_week))
+    
+    # Create a results table for this week
+    week_analysis <- data.frame(
+      feature = character(),
+      value = numeric(),
+      importance = numeric(),
+      percentile = numeric(),
+      stringsAsFactors = FALSE
+    )
+    
+    # For each prediction horizon (1-4 weeks ahead)
+    for (horizon in 1:weeks_ahead) {
+      cat(sprintf("\n  --- Horizon %d ---\n", horizon))
+      
+      # Get actual value
+      actual_value <- y_test$casos[base_week + horizon]
+      
+      # Get predicted value from all_predictions dataframe
+      pred_row <- all_predictions[all_predictions$base_week == base_week & 
+                                    all_predictions$horizon == horizon, ]
+      
+      if (nrow(pred_row) > 0) {
+        predicted_value <- pred_row$predicted[1]
+        prediction_error <- (predicted_value - actual_value) / actual_value * 100
+        cat(sprintf("  Actual: %d, Predicted: %.1f, Error: %.1f%%\n", 
+                    actual_value, predicted_value, prediction_error))
+      } else {
+        cat("  No prediction found for this horizon\n")
+        next
+      }
+      
+      # Generate the feature values that would have been used for this prediction
+      prediction_features <- generate_feature_vector_for_analysis(base_week, horizon)
+      
+      # Analyze each feature's contribution
+      for (feature_name in names(prediction_features)) {
+        feature_value <- prediction_features[[feature_name]]
+        feature_imp <- var_imp_perc[feature_name]
+        
+        # Get the percentile of this feature value relative to all values in training data
+        # Skip if feature doesn't exist in x_train
+        if (feature_name %in% colnames(x_train)) {
+          all_values <- x_train[[feature_name]]
+          percentile <- ecdf(all_values)(feature_value) * 100
+          
+          # Add to results
+          week_analysis <- rbind(week_analysis, data.frame(
+            feature = feature_name,
+            value = feature_value,
+            importance = feature_imp,
+            percentile = percentile,
+            horizon = horizon
+          ))
+        }
+      }
+    }
+    
+    # Sort by importance
+    week_analysis <- week_analysis[order(-week_analysis$importance), ]
+    
+    # Add to overall results
+    analysis_results[[as.character(base_week)]] <- week_analysis
+    
+    # Print most important features with extreme values
+    cat("\nTop potentially problematic features (high importance + extreme values):\n")
+    problematic <- week_analysis[week_analysis$importance > 2 & 
+                                   (week_analysis$percentile > 90 | week_analysis$percentile < 10), ]
+    
+    if (nrow(problematic) > 0) {
+      print(problematic[, c("feature", "value", "importance", "percentile", "horizon")])
+    } else {
+      cat("No extreme values found in important features\n")
+    }
+    
+    # Print top 10 most important features regardless of extremeness
+    cat("\nTop 10 most important features:\n")
+    top_important <- week_analysis[!duplicated(week_analysis$feature), ][1:10, ]
+    print(top_important[, c("feature", "importance")])
+    
+    # Print features with the most extreme values
+    cat("\nFeatures with extreme values (regardless of importance):\n")
+    extreme_features <- week_analysis[week_analysis$percentile > 95 | week_analysis$percentile < 5, ]
+    
+    if (nrow(extreme_features) > 0) {
+      extreme_features <- extreme_features[!duplicated(extreme_features$feature), ]
+      extreme_features <- extreme_features[order(abs(extreme_features$percentile - 50), decreasing = TRUE), ]
+      print(extreme_features[1:min(10, nrow(extreme_features)), c("feature", "value", "percentile", "importance")])
+    } else {
+      cat("No extreme values found\n")
+    }
+  }
+  
+  # Create visualizations
+  for (base_week in base_weeks) {
+    # Create a plot showing feature importance vs percentile
+    week_data <- analysis_results[[as.character(base_week)]]
+    
+    # Get unique features (remove duplicates from different horizons)
+    unique_features <- week_data[!duplicated(week_data$feature), ]
+    
+    # Create visualization
+    p <- ggplot(unique_features, aes(x = percentile, y = importance, label = feature)) +
+      geom_point(aes(size = importance, color = abs(percentile - 50)), alpha = 0.7) +
+      geom_text_repel(data = unique_features[unique_features$importance > 3 | 
+                                               abs(unique_features$percentile - 50) > 40, ],
+                      size = 3, max.overlaps = 15) +
+      scale_color_gradient(low = "blue", high = "red") +
+      labs(title = paste("Feature Analysis for Base Week", base_week),
+           subtitle = "Importance vs. Percentile of Feature Values",
+           x = "Percentile of Feature Value",
+           y = "Feature Importance (%)",
+           color = "Extremeness",
+           size = "Importance") +
+      theme_minimal() +
+      geom_vline(xintercept = 50, linetype = "dashed", color = "gray") +
+      geom_vline(xintercept = c(10, 90), linetype = "dotted", color = "gray") +
+      scale_x_continuous(breaks = seq(0, 100, 10))
+    
+    print(p)
+  }
+  
+  return(analysis_results)
+}
+
+# Helper function to generate feature vector for a specific week and horizon
+generate_feature_vector_for_analysis <- function(base_week, horizon) {
+  # Get recent values for prediction
+  v1 <- y_test$casos[base_week]
+  v2 <- y_test$casos[base_week - 1]
+  v3 <- y_test$casos[base_week - 2]
+  v4 <- y_test$casos[base_week - 3]
+  
+  avg_precip_lag <- ((y_test$precip_tot_sum[base_week]) + 
+                       (y_test$precip_tot_sum[base_week - 1]) + 
+                       (y_test$precip_tot_sum[base_week - 2]) + 
+                       (y_test$precip_tot_sum[base_week -3])) / 4
+  
+  # Get week number for seasonality
+  week_number <- y_test$week_number[base_week + horizon]
+  
+  # Initialize all features that will be used
+  current_temp_med_lag1 <- y_test$temp_med_avg[base_week]
+  current_temp_med_lag2 <- y_test$temp_med_avg[base_week]
+  current_temp_med_lag3 <- y_test$temp_med_avg[base_week]
+  current_temp_med_lag4 <- y_test$temp_med_avg[base_week]
+  current_umid_med_lag1 <- y_test$umid_med_avg[base_week]
+  current_umid_med_lag2 <- y_test$umid_med_avg[base_week]
+  current_umid_med_lag3 <- y_test$umid_med_avg[base_week]
+  current_umid_med_lag4 <- y_test$umid_med_avg[base_week]
+  current_precip_tot_lag1 <- avg_precip_lag
+  current_precip_tot_lag2 <- avg_precip_lag
+  current_precip_tot_lag3 <- avg_precip_lag
+  current_precip_tot_lag4 <- avg_precip_lag
+  current_temp_competence_optimality <- y_test$temp_competence_optimality[base_week]
+  current_humidity_risk <- y_test$humidity_risk[base_week]
+  current_temp_competence_humidty_risk <- y_test$temp_competence_humidty_risk[base_week]
+  
+  # New features
+  current_temp_volatility <- ifelse("temp_volatility" %in% colnames(y_test), 
+                                    y_test$temp_volatility[base_week], 
+                                    sd(c(y_test$temp_med_avg[base_week:(base_week-3)])))
+  
+  current_favorable_weeks_count <- ifelse("favorable_weeks_count" %in% colnames(y_test), 
+                                          y_test$favorable_weeks_count[base_week], 0)
+  
+  current_dry_then_wet <- ifelse("dry_then_wet" %in% colnames(y_test), 
+                                 y_test$dry_then_wet[base_week], 0)
+  
+  current_climate_state_change <- ifelse("climate_state_change" %in% colnames(y_test), 
+                                         y_test$climate_state_change[base_week], 0)
+  
+  # Set case lags based on horizon
+  if (horizon == 1) {
+    current_lag1 <- v1
+    current_lag2 <- v2
+    current_lag3 <- v3
+    current_lag4 <- v4
+  } else if (horizon == 2) {
+    # For horizon 2, we'd use the predicted value from horizon 1
+    horizon1_pred_row <- all_predictions[all_predictions$base_week == base_week & 
+                                           all_predictions$horizon == 1, ]
+    
+    if (nrow(horizon1_pred_row) > 0) {
+      current_lag1 <- horizon1_pred_row$predicted[1]
+    } else {
+      # If no prediction found, use the actual value as fallback
+      current_lag1 <- y_test$casos[base_week + 1]
+    }
+    
+    current_lag2 <- v1
+    current_lag3 <- v2
+    current_lag4 <- v3
+  } else if (horizon == 3) {
+    # For horizon 3, use predictions from horizons 1 and 2
+    horizon1_pred_row <- all_predictions[all_predictions$base_week == base_week & 
+                                           all_predictions$horizon == 1, ]
+    horizon2_pred_row <- all_predictions[all_predictions$base_week == base_week & 
+                                           all_predictions$horizon == 2, ]
+    
+    if (nrow(horizon2_pred_row) > 0) {
+      current_lag1 <- horizon2_pred_row$predicted[1]
+    } else {
+      current_lag1 <- y_test$casos[base_week + 2]
+    }
+    
+    if (nrow(horizon1_pred_row) > 0) {
+      current_lag2 <- horizon1_pred_row$predicted[1]
+    } else {
+      current_lag2 <- y_test$casos[base_week + 1]
+    }
+    
+    current_lag3 <- v1
+    current_lag4 <- v2
+  } else if (horizon == 4) {
+    # For horizon 4, use predictions from horizons 1, 2, and 3
+    horizon1_pred_row <- all_predictions[all_predictions$base_week == base_week & 
+                                           all_predictions$horizon == 1, ]
+    horizon2_pred_row <- all_predictions[all_predictions$base_week == base_week & 
+                                           all_predictions$horizon == 2, ]
+    horizon3_pred_row <- all_predictions[all_predictions$base_week == base_week & 
+                                           all_predictions$horizon == 3, ]
+    
+    if (nrow(horizon3_pred_row) > 0) {
+      current_lag1 <- horizon3_pred_row$predicted[1]
+    } else {
+      current_lag1 <- y_test$casos[base_week + 3]
+    }
+    
+    if (nrow(horizon2_pred_row) > 0) {
+      current_lag2 <- horizon2_pred_row$predicted[1]
+    } else {
+      current_lag2 <- y_test$casos[base_week + 2]
+    }
+    
+    if (nrow(horizon1_pred_row) > 0) {
+      current_lag3 <- horizon1_pred_row$predicted[1]
+    } else {
+      current_lag3 <- y_test$casos[base_week + 1]
+    }
+    
+    current_lag4 <- v1
+  }
+  
+  # Calculate derived values
+  mov_sd <- sd(c(current_lag1, current_lag2, current_lag3))
+  avg <- mean(c(current_lag1, current_lag2, current_lag3))
+  wavg <- ((current_lag1 * 3) + (current_lag2 * 2) + (current_lag3)) / 6
+  
+  # Calculate decay
+  if (current_lag1 < current_lag2 && current_lag2 < current_lag3) {
+    declines <- c((current_lag1 - current_lag2) / current_lag2,
+                  (current_lag2 - current_lag3) / current_lag3)
+    current_decay <- mean(declines)
+  } else {
+    current_decay <- 0
+  }
+  
+  # Create feature vector
+  features <- list(
+    casos_lag1 = current_lag1,
+    casos_lag2 = current_lag2,
+    casos_lag3 = current_lag3,
+    casos_lag4 = current_lag4,
+    temp_med_lag1 = current_temp_med_lag1,
+    temp_med_lag2 = current_temp_med_lag2,
+    temp_med_lag3 = current_temp_med_lag3,
+    temp_med_lag4 = current_temp_med_lag4,
+    umid_med_lag1 = current_umid_med_lag1,
+    umid_med_lag2 = current_umid_med_lag2,
+    umid_med_lag3 = current_umid_med_lag3,
+    umid_med_lag4 = current_umid_med_lag4,
+    precip_tot_lag1 = current_precip_tot_lag1,
+    precip_tot_lag2 = current_precip_tot_lag2,
+    precip_tot_lag3 = current_precip_tot_lag3,
+    precip_tot_lag4 = current_precip_tot_lag4,
+    temp_competence_optimality = current_temp_competence_optimality,
+    humidity_risk = current_humidity_risk,
+    temp_competence_humidty_risk = current_temp_competence_humidty_risk,
+    sin_year = sin(2 * pi * week_number/52),
+    cos_year = cos(2 * pi * week_number/52),
+    casoslag1_mov_sd = mov_sd,
+    avg = avg,
+    wavg = wavg,
+    decay = current_decay,
+    temp_volatility = current_temp_volatility,
+    favorable_weeks_count = current_favorable_weeks_count,
+    dry_then_wet = current_dry_then_wet,
+    climate_state_change = current_climate_state_change
+  )
+  
+  return(features)
+}
+
+# Analyze the problematic weeks
+problem_analysis <- analyze_problem_weeks(post_model, c(31))
