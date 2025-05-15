@@ -12,6 +12,7 @@ library(gganimate)
 library(gifski)
 library(transformr)
 library(parallel)
+library(forecast)
 library(tidyr)
 
 # Get API key
@@ -22,25 +23,62 @@ API_KEY <- Sys.getenv("MOSQLIMATE_API_KEY")
 # Calling API for climate and dengue
 api_calls <- function(api_name) {
   if (api_name == "climate") {
-    # API CALL FOR CLIMATE 2019 - 2023
+    # API CALL FOR CLIMATE
     climate_weekly_api <- "https://api.mosqlimate.org/api/datastore/climate/weekly/"
-    climate_data <- data.frame()
-    params <- list(
-      page = 1,
-      per_page = 300,
-      start = 201901,
-      end = 202352,
-      geocode = 3304557
-      # uf = UF,
-    )
-    headers <- add_headers(
-      `X-UID-Key` = API_KEY
-    )
-    resp <- GET(climate_weekly_api, query = params, headers)
-    json_content <- fromJSON(content(resp, "text"))
-    items <- json_content$items
-    climate_data <- rbind(climate_data, items)
-    climate_data$week_of_year <- as.numeric(substr(climate_data$epiweek, 5, 6))
+    all_items <- list()  # Store items in a list for more efficient collection
+    total_pages_estimate <- 500
+    
+    for (pagenumber in 1:total_pages_estimate) {
+      params <- list(
+        page = pagenumber,
+        per_page = 300,
+        start = 201101,  # Extended start date from 2011
+        end = 202352,
+        geocode = 3304557
+      )
+      
+      headers <- add_headers(
+        `X-UID-Key` = API_KEY
+      )
+      
+      resp <- GET(climate_weekly_api, query = params, headers)
+      
+      # Handle HTTP errors
+      if (http_error(resp)) {
+        message(paste("Error:", status_code(resp)))
+        break
+      }
+      
+      # Safe JSON parsing
+      tryCatch({
+        json_content <- fromJSON(content(resp, "text"))
+        items <- json_content$items
+        
+        # Store this page's items
+        if (length(items) > 0 && nrow(items) > 0) {
+          all_items[[pagenumber]] <- items
+          message(sprintf("Page %d: Retrieved %d items", pagenumber, nrow(items)))
+        }
+        
+        # Break if we got fewer items than requested (likely the last page)
+        if (length(items) == 0 || nrow(items) < 300) {
+          message("Reached last page of data")
+          break
+        }
+        
+      }, error = function(e) {
+        message(paste("Error parsing response:", e$message))
+        break
+      })
+    }
+    
+    # Combine all items into a single data frame
+    climate_data <- do.call(rbind, all_items)
+    
+    # Add week_of_year column once after all data is collected
+    if (nrow(climate_data) > 0) {
+      climate_data$week_of_year <- as.numeric(substr(climate_data$epiweek, 5, 6))
+    }
     
     api_response <- climate_data
   }
@@ -50,7 +88,7 @@ api_calls <- function(api_name) {
     # API CALL FOR DENGUE CASES 2019 - 2023
     dengue_data <- data.frame()
     dengue_api <- "https://api.mosqlimate.org/api/datastore/infodengue/?disease=dengue"
-    date <- paste0("&start=2018-12-30&end=2023-12-30")
+    date <- paste0("&start=2010-12-30&end=2023-12-30")
     geocode <- paste0("&geocode=3304557")
     total_pages_estimate <- 500
     for (pagenumber in 1:total_pages_estimate) { # Loop until there are no more pages
@@ -151,7 +189,7 @@ feature_creation <- function() {
     return(optimal_conditions)
   }
   
-  # Vectorized approach
+  # Vectorized approach with precipitation included
   fill_lag_columns <- function(data, temp_weekly_avg) {
     # Define pairs of columns (original column, average column)
     column_pairs <- list(
@@ -162,7 +200,11 @@ feature_creation <- function() {
       list("umid_med_lag1", "avg_umidmed_lag1"),
       list("umid_med_lag2", "avg_umidmed_lag2"),
       list("umid_med_lag3", "avg_umidmed_lag3"),
-      list("umid_med_lag4", "avg_umidmed_lag4")
+      list("umid_med_lag4", "avg_umidmed_lag4"),
+      list("precip_tot_lag1", "avg_precip_tot_lag1"),
+      list("precip_tot_lag2", "avg_precip_tot_lag2"),
+      list("precip_tot_lag3", "avg_precip_tot_lag3"),
+      list("precip_tot_lag4", "avg_precip_tot_lag4")
     )
     
     # Create a lookup table for each weekly average column
@@ -191,7 +233,6 @@ feature_creation <- function() {
     
     return(data)
   }
-  
   
   
   # LAGGED CASES
@@ -288,21 +329,31 @@ feature_creation <- function() {
   dengue_data_ordered$umid_med_lag3 <- dplyr::lag(climate_data$umid_med_avg, 3)
   dengue_data_ordered$umid_med_lag4 <- dplyr::lag(climate_data$umid_med_avg, 4)
   
+  #Preciptation Total Lag
+  dengue_data_ordered$precip_tot_lag1 <- dplyr::lag(climate_data$precip_tot_sum, 1)
+  dengue_data_ordered$precip_tot_lag2 <- dplyr::lag(climate_data$precip_tot_sum, 2)
+  dengue_data_ordered$precip_tot_lag3 <- dplyr::lag(climate_data$precip_tot_sum, 3)
+  dengue_data_ordered$precip_tot_lag4 <- dplyr::lag(climate_data$precip_tot_sum, 4)
+  
   # Calculate average lag values by week of year
   temp_weekly_avg <- dengue_data_ordered %>%
     group_by(week_of_year) %>%
     summarize(
       avg_tempmed_lag1 = mean(temp_med_lag1, na.rm = TRUE),
       avg_umidmed_lag1 = mean(umid_med_lag1, na.rm = TRUE),
+      avg_precip_tot_lag1 = mean(precip_tot_lag1, na.rm = TRUE),
       
       avg_tempmed_lag2 = mean(temp_med_lag2, na.rm = TRUE),
       avg_umidmed_lag2 = mean(umid_med_lag2, na.rm = TRUE),
+      avg_precip_tot_lag2 = mean(precip_tot_lag2, na.rm = TRUE),
       
       avg_tempmed_lag3 = mean(temp_med_lag3, na.rm = TRUE),
       avg_umidmed_lag3 = mean(umid_med_lag3, na.rm = TRUE),
+      avg_precip_tot_lag3 = mean(precip_tot_lag3, na.rm = TRUE),
       
       avg_tempmed_lag4 = mean(temp_med_lag4, na.rm = TRUE),
-      avg_umidmed_lag4 = mean(umid_med_lag4, na.rm = TRUE)
+      avg_umidmed_lag4 = mean(umid_med_lag4, na.rm = TRUE),
+      avg_precip_tot_lag4 = mean(precip_tot_lag4, na.rm = TRUE)
     )
   
   dengue_data_ordered <- fill_lag_columns(dengue_data_ordered, temp_weekly_avg)
@@ -336,18 +387,22 @@ feature_creation <- function() {
     dengue_data_train$casos_lag2,
     dengue_data_train$casos_lag3,
     dengue_data_train$casos_lag4,
-    # dengue_data_train$temp_med_lag1,
-    # dengue_data_train$temp_med_lag2,
-    # dengue_data_train$temp_med_lag3,
-    # dengue_data_train$temp_med_lag4,
-    # dengue_data_train$umid_med_lag1,
-    # dengue_data_train$umid_med_lag2,
-    # dengue_data_train$umid_med_lag3,
-    # dengue_data_train$umid_med_lag4,
-    # dengue_data_train$temp_competence_optimality,
-    # dengue_data_train$humidity_risk,
+    dengue_data_train$temp_med_lag1,
+    dengue_data_train$temp_med_lag2,
+    dengue_data_train$temp_med_lag3,
+    dengue_data_train$temp_med_lag4,
+    dengue_data_train$umid_med_lag1,
+    dengue_data_train$umid_med_lag2,
+    dengue_data_train$umid_med_lag3,
+    dengue_data_train$umid_med_lag4,
+    dengue_data_train$precip_tot_lag1,
+    dengue_data_train$precip_tot_lag2,
+    dengue_data_train$precip_tot_lag3,
+    dengue_data_train$precip_tot_lag4,
+    dengue_data_train$temp_competence_optimality,
+    dengue_data_train$humidity_risk,
+    dengue_data_train$temp_competence_humidty_risk,
     # dengue_data_train$optimal_conditions,
-    # dengue_data_train$temp_competence_humidty_risk,
     dengue_data_train$sin_year,
     dengue_data_train$cos_year,
     dengue_data_train$casoslag1_mov_sd,
@@ -363,18 +418,22 @@ feature_creation <- function() {
     "casos_lag2",
     "casos_lag3",
     "casos_lag4",
-    # "temp_med_lag1",
-    # "temp_med_lag2",
-    # "temp_med_lag3",
-    # "temp_med_lag4",
-    # "umid_med_lag1",
-    # "umid_med_lag2",
-    # "umid_med_lag3",
-    # "umid_med_lag4",
-    # "temp_competence_optimality",
+    "temp_med_lag1",
+    "temp_med_lag2",
+    "temp_med_lag3",
+    "temp_med_lag4",
+    "umid_med_lag1",
+    "umid_med_lag2",
+    "umid_med_lag3",
+    "umid_med_lag4",
+    "precip_tot_lag1",
+    "precip_tot_lag2",
+    "precip_tot_lag3",
+    "precip_tot_lag4",
+    "temp_competence_optimality",
+    "humidity_risk",
+    "temp_competence_humidty_risk",
     # "optimal_conditions",
-    # "humidity_risk",
-    # "temp_competence_humidty_risk",
     "sin_year",
     "cos_year",
     "casoslag1_mov_sd",
@@ -383,13 +442,14 @@ feature_creation <- function() {
     "decay"
   )
   
-  y_train <- cbind(
-    dengue_data_train$casos
-  )
+  lambda <- BoxCox.lambda(dengue_data_train$casos)
+  y_train <- cbind(BoxCox(dengue_data_train$casos, lambda))
   
   y_test <- cbind(
     dengue_data_test$casos,
     climate_data_test$temp_med_avg,
+    climate_data_test$umid_med_avg,
+    climate_data_test$precip_tot_sum,
     dengue_data_test$temp_competence_optimality,
     dengue_data_test$humidity_risk,
     dengue_data_test$temp_competence_humidty_risk
@@ -401,6 +461,8 @@ feature_creation <- function() {
   colnames(y_test) <- c(
     "casos",
     "temp_med_avg",
+    "umid_med_avg",
+    "precip_tot_sum",
     "temp_competence_optimality",
     "humidity_risk",
     "temp_competence_humidty_risk"
@@ -413,7 +475,8 @@ feature_creation <- function() {
     list(
       x_train_df = x_train_df,
       y_train = y_train,
-      y_test = y_test
+      y_test = y_test,
+      lambda = lambda
     )
   )
 }
@@ -423,16 +486,16 @@ bart_model <- function () {
   set.seed(7)
   burn <- 13000
   nd <- 5000
-  k_value <- 2
-  power_value <- 2
-  ntree_value <- 150L
-  post <- wbart(x_train, y_train, nskip = burn, ndpost = nd, k=k_value, power = power_value, ntree = ntree_value)
+  k_value <- 2.5
+  power_value <- 0.5
+  ntree_value <- 200L
+  post <- wbart(x_train, y_train, nskip = burn, ndpost = nd, k=k_value, power = power_value, ntree = ntree_value, sparse = TRUE)
   
   return (post)
 }
 
 # Create a function to generate predictions for a range of base weeks
-generate_predictions_across_year <- function(start_week, end_week, weeks_ahead) {
+generate_predictions_across_year <- function(start_week, end_week, weeks_ahead, post) {
   # Create a data frame to store all predictions
   all_predictions <- data.frame()
   
@@ -493,6 +556,8 @@ generate_predictions_across_year <- function(start_week, end_week, weeks_ahead) 
     v3 <- y_test$casos[week_base - 2]
     v4 <- y_test$casos[week_base - 3]
     
+    avg_precip_lag <- ((y_test$precip_tot_sum[week_base]) + (y_test$precip_tot_sum[week_base - 1]) + (y_test$precip_tot_sum[week_base - 2]) + (y_test$precip_tot_sum[week_base -3])) / 4
+    
     # Get actual values for comparison
     actual_values <- y_test$casos[(week_base + 1):(week_base + weeks_ahead)]
     
@@ -504,10 +569,14 @@ generate_predictions_across_year <- function(start_week, end_week, weeks_ahead) 
         current_temp_med_lag2 <- y_test$temp_med_avg[week_base]
         current_temp_med_lag3 <- y_test$temp_med_avg[week_base]
         current_temp_med_lag4 <- y_test$temp_med_avg[week_base]
-        current_umid_med_lag1 <- y_test$temp_med_avg[week_base]
-        current_umid_med_lag2 <- y_test$temp_med_avg[week_base]
-        current_umid_med_lag3 <- y_test$temp_med_avg[week_base]
-        current_umid_med_lag4 <- y_test$temp_med_avg[week_base]
+        current_umid_med_lag1 <- y_test$umid_med_avg[week_base]
+        current_umid_med_lag2 <- y_test$umid_med_avg[week_base]
+        current_umid_med_lag3 <- y_test$umid_med_avg[week_base]
+        current_umid_med_lag4 <- y_test$umid_med_avg[week_base]
+        current_precip_tot_lag1 <- avg_precip_lag
+        current_precip_tot_lag2 <- avg_precip_lag
+        current_precip_tot_lag3 <- avg_precip_lag
+        current_precip_tot_lag4 <- avg_precip_lag
         current_temp_competence_optimality <- y_test$temp_competence_optimality[week_base]
         current_humidity_risk <- y_test$humidity_risk[week_base]
         current_temp_competence_humidty_risk <- y_test$temp_competence_humidty_risk[week_base]
@@ -532,10 +601,14 @@ generate_predictions_across_year <- function(start_week, end_week, weeks_ahead) 
         current_temp_med_lag2 <- y_test$temp_med_avg[week_base]
         current_temp_med_lag3 <- y_test$temp_med_avg[week_base]
         current_temp_med_lag4 <- y_test$temp_med_avg[week_base]
-        current_umid_med_lag1 <- y_test$temp_med_avg[week_base]
-        current_umid_med_lag2 <- y_test$temp_med_avg[week_base]
-        current_umid_med_lag3 <- y_test$temp_med_avg[week_base]
-        current_umid_med_lag4 <- y_test$temp_med_avg[week_base]
+        current_umid_med_lag1 <- y_test$umid_med_avg[week_base]
+        current_umid_med_lag2 <- y_test$umid_med_avg[week_base]
+        current_umid_med_lag3 <- y_test$umid_med_avg[week_base]
+        current_umid_med_lag4 <- y_test$umid_med_avg[week_base]
+        current_precip_tot_lag1 <- avg_precip_lag
+        current_precip_tot_lag2 <- avg_precip_lag
+        current_precip_tot_lag3 <- avg_precip_lag
+        current_precip_tot_lag4 <- avg_precip_lag
         current_temp_competence_optimality <- y_test$temp_competence_optimality[week_base]
         current_humidity_risk <- y_test$humidity_risk[week_base]
         current_temp_competence_humidty_risk <- y_test$temp_competence_humidty_risk[week_base]
@@ -560,10 +633,14 @@ generate_predictions_across_year <- function(start_week, end_week, weeks_ahead) 
         current_temp_med_lag2 <- y_test$temp_med_avg[week_base]
         current_temp_med_lag3 <- y_test$temp_med_avg[week_base]
         current_temp_med_lag4 <- y_test$temp_med_avg[week_base]
-        current_umid_med_lag1 <- y_test$temp_med_avg[week_base]
-        current_umid_med_lag2 <- y_test$temp_med_avg[week_base]
-        current_umid_med_lag3 <- y_test$temp_med_avg[week_base]
-        current_umid_med_lag4 <- y_test$temp_med_avg[week_base]
+        current_umid_med_lag1 <- y_test$umid_med_avg[week_base]
+        current_umid_med_lag2 <- y_test$umid_med_avg[week_base]
+        current_umid_med_lag3 <- y_test$umid_med_avg[week_base]
+        current_umid_med_lag4 <- y_test$umid_med_avg[week_base]
+        current_precip_tot_lag1 <- avg_precip_lag
+        current_precip_tot_lag2 <- avg_precip_lag
+        current_precip_tot_lag3 <- avg_precip_lag
+        current_precip_tot_lag4 <- avg_precip_lag
         current_temp_competence_optimality <- y_test$temp_competence_optimality[week_base]
         current_humidity_risk <- y_test$humidity_risk[week_base]
         current_temp_competence_humidty_risk <- y_test$temp_competence_humidty_risk[week_base]
@@ -588,10 +665,14 @@ generate_predictions_across_year <- function(start_week, end_week, weeks_ahead) 
         current_temp_med_lag2 <- y_test$temp_med_avg[week_base]
         current_temp_med_lag3 <- y_test$temp_med_avg[week_base]
         current_temp_med_lag4 <- y_test$temp_med_avg[week_base]
-        current_umid_med_lag1 <- y_test$temp_med_avg[week_base]
-        current_umid_med_lag2 <- y_test$temp_med_avg[week_base]
-        current_umid_med_lag3 <- y_test$temp_med_avg[week_base]
-        current_umid_med_lag4 <- y_test$temp_med_avg[week_base]
+        current_umid_med_lag1 <- y_test$umid_med_avg[week_base]
+        current_umid_med_lag2 <- y_test$umid_med_avg[week_base]
+        current_umid_med_lag3 <- y_test$umid_med_avg[week_base]
+        current_umid_med_lag4 <- y_test$umid_med_avg[week_base]
+        current_precip_tot_lag1 <- avg_precip_lag
+        current_precip_tot_lag2 <- avg_precip_lag
+        current_precip_tot_lag3 <- avg_precip_lag
+        current_precip_tot_lag4 <- avg_precip_lag
         current_temp_competence_optimality <- y_test$temp_competence_optimality[week_base]
         current_humidity_risk <- y_test$humidity_risk[week_base]
         current_temp_competence_humidty_risk <- y_test$temp_competence_humidty_risk[week_base]
@@ -616,10 +697,14 @@ generate_predictions_across_year <- function(start_week, end_week, weeks_ahead) 
         current_temp_med_lag2 <- y_test$temp_med_avg[week_base]
         current_temp_med_lag3 <- y_test$temp_med_avg[week_base]
         current_temp_med_lag4 <- y_test$temp_med_avg[week_base]
-        current_umid_med_lag1 <- y_test$temp_med_avg[week_base]
-        current_umid_med_lag2 <- y_test$temp_med_avg[week_base]
-        current_umid_med_lag3 <- y_test$temp_med_avg[week_base]
-        current_umid_med_lag4 <- y_test$temp_med_avg[week_base]
+        current_umid_med_lag1 <- y_test$umid_med_avg[week_base]
+        current_umid_med_lag2 <- y_test$umid_med_avg[week_base]
+        current_umid_med_lag3 <- y_test$umid_med_avg[week_base]
+        current_umid_med_lag4 <- y_test$umid_med_avg[week_base]
+        current_precip_tot_lag1 <- avg_precip_lag
+        current_precip_tot_lag2 <- avg_precip_lag
+        current_precip_tot_lag3 <- avg_precip_lag
+        current_precip_tot_lag4 <- avg_precip_lag
         current_temp_competence_optimality <- y_test$temp_competence_optimality[week_base]
         current_humidity_risk <- y_test$humidity_risk[week_base]
         current_temp_competence_humidty_risk <- y_test$temp_competence_humidty_risk[week_base]
@@ -647,17 +732,21 @@ generate_predictions_across_year <- function(start_week, end_week, weeks_ahead) 
         casos_lag2 = current_lag2,
         casos_lag3 = current_lag3,
         casos_lag4 = current_lag4,
-        # temp_med_lag1 = current_temp_med_lag1,
-        # temp_med_lag2 = current_temp_med_lag2,
-        # temp_med_lag3 = current_temp_med_lag3,
-        # temp_med_lag4 = current_temp_med_lag4,
-        # umid_med_lag1 = current_umid_med_lag1,
-        # umid_med_lag2 = current_umid_med_lag2,
-        # umid_med_lag3 = current_umid_med_lag3,
-        # umid_med_lag4 = current_umid_med_lag4,
-        # temp_competence_optimality = current_temp_competence_optimality,
-        # humidity_risk = current_humidity_risk,
-        # temp_competence_humidty_risk = current_temp_competence_humidty_risk,
+        temp_med_lag1 = current_temp_med_lag1,
+        temp_med_lag2 = current_temp_med_lag2,
+        temp_med_lag3 = current_temp_med_lag3,
+        temp_med_lag4 = current_temp_med_lag4,
+        umid_med_lag1 = current_umid_med_lag1,
+        umid_med_lag2 = current_umid_med_lag2,
+        umid_med_lag3 = current_umid_med_lag3,
+        umid_med_lag4 = current_umid_med_lag4,
+        precip_tot_lag1 = current_precip_tot_lag1,
+        precip_tot_lag2 = current_precip_tot_lag2,
+        precip_tot_lag3 = current_precip_tot_lag3,
+        precip_tot_lag4 = current_precip_tot_lag4,
+        temp_competence_optimality = current_temp_competence_optimality,
+        humidity_risk = current_humidity_risk,
+        temp_competence_humidty_risk = current_temp_competence_humidty_risk,
         # optimal_conditions = current_optimal_conditions,
         sin_year = sin(2 * pi * week_number/52),
         cos_year = cos(2 * pi * week_number/52),
@@ -666,30 +755,29 @@ generate_predictions_across_year <- function(start_week, end_week, weeks_ahead) 
         wavg = wavg,
         decay = current_decay
       )
-      
+
       # Make prediction
       quantile_levels <- c(0.01, 0.025, 0.05, 0.1, 0.2, 0.25, 0.3, 0.4, 0.5, 
                            0.6, 0.7, 0.75, 0.8, 0.9, 0.95, 0.975, 0.99)
       prediction <- predict(post, newdata = recursive_data)
+      median_prediction <- InvBoxCox(apply(prediction, 2, median), lambda)
+      mean_prediction <- InvBoxCox(apply(prediction, 2, mean), lambda)
+      li_prediction <- InvBoxCox(apply(prediction, 2, quantile, probs = 0.025), lambda)
+      ui_prediction <- InvBoxCox(apply(prediction, 2, quantile, probs = 0.975), lambda)
       
       # Extract all quantiles
-      q1[week] <- apply(prediction, 2, quantile, probs = 0.01)
-      q2.5[week] <- apply(prediction, 2, quantile, probs = 0.025)
-      q5[week] <- apply(prediction, 2, quantile, probs = 0.05)
-      q10[week] <- apply(prediction, 2, quantile, probs = 0.1)
-      q25[week] <- apply(prediction, 2, quantile, probs = 0.25)
-      q50[week] <- apply(prediction, 2, median)
-      q75[week] <- apply(prediction, 2, quantile, probs = 0.75)
-      q90[week] <- apply(prediction, 2, quantile, probs = 0.9)
-      q95[week] <- apply(prediction, 2, quantile, probs = 0.95)
-      q97.5[week] <- apply(prediction, 2, quantile, probs = 0.975)
-      q99[week] <- apply(prediction, 2, quantile, probs = 0.99)
+      q1[week] <- InvBoxCox(apply(prediction, 2, quantile, probs = 0.01), lambda)
+      q2.5[week] <- InvBoxCox(apply(prediction, 2, quantile, probs = 0.025), lambda)
+      q5[week] <- InvBoxCox(apply(prediction, 2, quantile, probs = 0.05), lambda)
+      q10[week] <- InvBoxCox(apply(prediction, 2, quantile, probs = 0.1), lambda)
+      q25[week] <- InvBoxCox(apply(prediction, 2, quantile, probs = 0.25), lambda)
+      q50[week] <- InvBoxCox(apply(prediction, 2, median), lambda)
+      q75[week] <- InvBoxCox(apply(prediction, 2, quantile, probs = 0.75), lambda)
+      q90[week] <- InvBoxCox(apply(prediction, 2, quantile, probs = 0.9), lambda)
+      q95[week] <- InvBoxCox(apply(prediction, 2, quantile, probs = 0.95), lambda)
+      q97.5[week] <- InvBoxCox(apply(prediction, 2, quantile, probs = 0.975), lambda)
+      q99[week] <- InvBoxCox(apply(prediction, 2, quantile, probs = 0.99), lambda)
       
-      # Standard statistics
-      mean_prediction <- apply(prediction, 2, mean)
-      median_prediction <- apply(prediction, 2, median)
-      li_prediction <- q2.5[week]
-      ui_prediction <- q97.5[week]
       
       # Store standard predictions
       mean_predictions_2023[week] <- mean_prediction
@@ -857,7 +945,7 @@ generate_predictions_across_year <- function(start_week, end_week, weeks_ahead) 
       
       all_predictions <- rbind(all_predictions, new_row)
     }
-    
+    025
     # Print progress
     cat(sprintf("Processed base week %d/%d\r", week_base, end_week))
   }
@@ -932,7 +1020,7 @@ create_prediction_animation_year <- function(all_predictions, output_format, out
 }
 
 # Plot full year
-plot_full_year <- function() {
+plot_full_year <- function(predictions) {
   p <- ggplot() +
     # Plot the actual values as a black line
     geom_line(data = data.frame(week = 1:52, actual = y_test$casos),
@@ -941,13 +1029,13 @@ plot_full_year <- function() {
                aes(x = week, y = actual), color = "black", size = 2) +
     
     # Add the predictions as red points with confidence intervals
-    geom_ribbon(data = all_predictions, 
+    geom_ribbon(data = predictions, 
                 aes(x = prediction_week, ymin = lower_ci, ymax = upper_ci), 
                 fill = "red", alpha = 0.2) +
-    geom_line(data = all_predictions, 
+    geom_line(data = predictions, 
               aes(x = prediction_week, y = predicted, group = base_week), 
               color = "red", linetype = "dashed", size = 0.5) +
-    geom_point(data = all_predictions, 
+    geom_point(data = predictions, 
                aes(x = prediction_week, y = predicted), 
                color = "red", size = 2) +
     
@@ -964,9 +1052,9 @@ plot_full_year <- function() {
 }
 
 # Plot var imp
-plot_var_imp <- function() {
+plot_var_imp <- function(model) {
   # Assuming 'post' is your trained BART model and x_train has column names
-  var_imp <- post$varcount.mean
+  var_imp <- model$varcount.mean
   
   # Normalize to percentages
   var_imp_perc <- (var_imp/sum(var_imp)) * 100
@@ -984,6 +1072,10 @@ plot_var_imp <- function() {
     "umid_med_lag2",
     "umid_med_lag3",
     "umid_med_lag4",
+    "precip_tot_lag1",
+    "precip_tot_lag2",
+    "precip_tot_lag3",
+    "precip_tot_lag4",
     "temp_competence_optimality",
     "humidity_risk",
     "temp_competence_humidty_risk",
@@ -1313,7 +1405,7 @@ plot_calibration <- function(all_predictions, model_name = "BART") {
   return(p)
 }
 
-# Metrics by point predicted
+# Simple metrics by point predicted
 horizon_metrics <- function() {
   horizon_metrics <- all_predictions %>%
     group_by(horizon) %>%
@@ -1482,6 +1574,223 @@ visualize_model_metrics <- function(model_name, metrics_dir = NULL) {
   ))
 }
 
+# Grid search function for BART model hyperparameter optimization
+grid_search_bart <- function(
+    k_range = seq(0.5, 3, by = 0.5),
+    power_range = seq(0.5, 3, by = 0.5),
+    ntree_range = seq(50, 300, by = 50),
+    start_week = 4,
+    end_week = 48,
+    weeks_ahead = 4
+) {
+  # Create a dataframe to store results
+  results <- data.frame(
+    k_value = numeric(),
+    power_value = numeric(),
+    ntree_value = integer(),
+    mean_wis = numeric(),
+    mean_ae = numeric(),
+    rmse = numeric(),
+    mae = numeric(),
+    coverage_95 = numeric(),
+    file_path = character(),
+    stringsAsFactors = FALSE
+  )
+  
+  # Track the best model
+  best_model <- list(
+    k_value = NA,
+    power_value = NA, 
+    ntree_value = NA,
+    mean_wis = Inf,
+    post = NULL,
+    predictions = NULL
+  )
+  
+  # Total number of combinations for progress tracking
+  total_combinations <- length(k_range) * length(power_range) * length(ntree_range)
+  current_combination <- 0
+  
+  # Iterate through all combinations
+  for (k in k_range) {
+    for (power in power_range) {
+      for (ntree in ntree_range) {
+        # Update progress counter
+        current_combination <- current_combination + 1
+        model_name <- sprintf("k_%.1f_power_%.1f_ntree_%d", k, power, ntree)
+        
+        cat(sprintf("\nRunning combination %d/%d: %s\n", 
+                    current_combination, total_combinations, model_name))
+        
+        # Set hyperparameters and train model
+        set.seed(7)  # Ensure reproducibility for each run
+        burn <- 13000
+        nd <- 5000
+        
+        cat("Training BART model...\n")
+        current_post <- wbart(
+          x_train, y_train, 
+          nskip = burn, 
+          ndpost = nd, 
+          k = k, 
+          power = power, 
+          ntree = ntree, 
+          sparse = TRUE
+        )
+        
+        # Generate predictions
+        cat("Generating predictions...\n")
+        all_predictions <- generate_predictions_across_year(
+          start_week = start_week, 
+          end_week = end_week, 
+          weeks_ahead = weeks_ahead,
+          post = current_post
+        )
+        
+        # Store metrics
+        cat("Storing metrics...\n")
+        metrics <- store_model_metrics(
+          all_predictions,
+          model_name = model_name,
+          save_path = getwd()
+        )
+        
+        # Extract overall metrics
+        overall_metrics <- metrics$overall_metrics
+        horizon_metrics <- metrics$horizon_metrics
+        
+        # Calculate mean WIS across all horizons for comparison
+        mean_wis_value <- mean(horizon_metrics$mean_wis)
+        mean_ae_value <- mean(horizon_metrics$mean_ae)
+        mean_rmse <- mean(horizon_metrics$rmse)
+        mean_mae <- mean(horizon_metrics$mae)
+        mean_coverage <- mean(horizon_metrics$coverage_95)
+        
+        # Add to results dataframe
+        results <- rbind(results, data.frame(
+          k_value = k,
+          power_value = power,
+          ntree_value = ntree,
+          mean_wis = mean_wis_value,
+          mean_ae = mean_ae_value,
+          rmse = mean_rmse,
+          mae = mean_mae,
+          coverage_95 = mean_coverage,
+          file_path = metrics$files$horizon_file
+        ))
+        
+        # Save intermediate results
+        write.csv(results, "grid_search_results.csv", row.names = FALSE)
+        
+        # Check if this is the best model so far
+        if (mean_wis_value < best_model$mean_wis) {
+          cat(sprintf("New best model found! Mean WIS: %.4f\n", mean_wis_value))
+          best_model$k_value <- k
+          best_model$power_value <- power
+          best_model$ntree_value <- ntree
+          best_model$mean_wis <- mean_wis_value
+          best_model$post <- current_post
+          best_model$predictions <- all_predictions
+          
+          # Save the best model
+          saveRDS(current_post, "best_bart_model.rds")
+          saveRDS(all_predictions, "best_model_predictions.rds")
+        }
+      }
+    }
+  }
+  
+  # Sort results by mean_wis (ascending)
+  results <- results[order(results$mean_wis), ]
+  
+  # Save final results
+  write.csv(results, "final_grid_search_results.csv", row.names = FALSE)
+  
+  # Print the best hyperparameters
+  cat("\n===== GRID SEARCH COMPLETED =====\n")
+  cat(sprintf("Best hyperparameters found:\n"))
+  cat(sprintf("k_value: %.1f\n", best_model$k_value))
+  cat(sprintf("power_value: %.1f\n", best_model$power_value))
+  cat(sprintf("ntree_value: %d\n", best_model$ntree_value))
+  cat(sprintf("Mean WIS: %.4f\n", best_model$mean_wis))
+  
+  return(list(
+    results = results,
+    best_model = best_model
+  ))
+}
+
+# Function to visualize grid search results
+visualize_grid_search_results <- function(results_file = "final_grid_search_results.csv") {
+  # Load results
+  results <- read.csv(results_file)
+  
+  # Create summary plots
+  library(ggplot2)
+  library(gridExtra)
+  
+  # 1. Heatmap of mean_wis for k_value vs power_value (averaged over ntree_value)
+  heatmap_k_power <- results %>%
+    group_by(k_value, power_value) %>%
+    summarize(mean_wis = mean(mean_wis)) %>%
+    ggplot(aes(x = k_value, y = power_value, fill = mean_wis)) +
+    geom_tile() +
+    scale_fill_viridis_c(option = "plasma", direction = -1) +
+    labs(title = "Mean WIS by k and power values",
+         x = "k value", y = "power value") +
+    theme_minimal()
+  
+  # 2. Heatmap of mean_wis for k_value vs ntree_value (averaged over power_value)
+  heatmap_k_ntree <- results %>%
+    group_by(k_value, ntree_value) %>%
+    summarize(mean_wis = mean(mean_wis)) %>%
+    ggplot(aes(x = k_value, y = ntree_value, fill = mean_wis)) +
+    geom_tile() +
+    scale_fill_viridis_c(option = "plasma", direction = -1) +
+    labs(title = "Mean WIS by k and ntree values",
+         x = "k value", y = "ntree value") +
+    theme_minimal()
+  
+  # 3. Heatmap of mean_wis for power_value vs ntree_value (averaged over k_value)
+  heatmap_power_ntree <- results %>%
+    group_by(power_value, ntree_value) %>%
+    summarize(mean_wis = mean(mean_wis)) %>%
+    ggplot(aes(x = power_value, y = ntree_value, fill = mean_wis)) +
+    geom_tile() +
+    scale_fill_viridis_c(option = "plasma", direction = -1) +
+    labs(title = "Mean WIS by power and ntree values",
+         x = "power value", y = "ntree value") +
+    theme_minimal()
+  
+  # 4. Boxplot of mean_wis by ntree_value
+  boxplot_ntree <- ggplot(results, aes(x = factor(ntree_value), y = mean_wis)) +
+    geom_boxplot() +
+    labs(title = "Distribution of Mean WIS by Number of Trees",
+         x = "Number of Trees", y = "Mean WIS") +
+    theme_minimal()
+  
+  # 5. Find the top 5 best models
+  top_models <- results %>%
+    arrange(mean_wis) %>%
+    head(5)
+  
+  # Print the top 5 models
+  print("Top 5 Models by Mean WIS:")
+  print(top_models)
+  
+  # Combine plots
+  grid.arrange(heatmap_k_power, heatmap_k_ntree, heatmap_power_ntree, boxplot_ntree, ncol = 2)
+  
+  # Return the visualization objects
+  return(list(
+    heatmap_k_power = heatmap_k_power,
+    heatmap_k_ntree = heatmap_k_ntree,
+    heatmap_power_ntree = heatmap_power_ntree,
+    boxplot_ntree = boxplot_ntree,
+    top_models = top_models
+  ))
+}
+
 
 # CREATING IMPORTANT VARIABLES #
 climate_data <- api_calls(api_name = "climate")
@@ -1493,37 +1802,59 @@ y_train <- feature_creation() %>%
   .$y_train
 y_test <- feature_creation() %>%
   .$y_test
+lambda <- feature_creation() %>%
+  .$lambda
 
-post <- bart_model()
-
+# train the model from the ground up
+post_model <- bart_model()
 
 # Generate predictions for all base weeks
-all_predictions <- generate_predictions_across_year(start_week = 5, end_week = 5, weeks_ahead = 4) 
+all_predictions <- generate_predictions_across_year(start_week = 4, end_week = 48, weeks_ahead = 4, post_model)
+
 
 
 # Create and save the animation
 # output_format = "mp4"
-# create_prediction_animation_year(all_predictions, output_format, glue("dengue_predictions_2023_comparison_test.{output_format}"))
+# create_prediction_animation_year(all_predictions, output_format, glue("BART2011_bestparams_tempumidprecip_alllags_tempcomphumidrisk_andbothcombined_boxcoxtransform_sparsetrue.{output_format}"))
 
 
 # Plots to analysis:
-plot_full_year()
-plot_var_imp()
-plot_wis_decomposition_base(all_predictions)
+print(horizon_metrics())
+print(best_metrics)
+
+plot_full_year(all_predictions)
+plot_var_imp(post_model)
+# plot_wis_decomposition_base(all_predictions)
 plot_multi_coverage(all_predictions)
 # plot_pit_histogram(all_predictions)
 # plot_calibration(all_predictions)
 
+
 # Store the metrics with a descriptive name
-model_metrics <- store_model_metrics(
-  all_predictions, 
-  model_name = glue("BART_test"), 
-  save_path = getwd()
-)
-print(model_metrics$horizon_metrics)
+# model_metrics <- store_model_metrics(
+#   all_predictions,
+#   model_name = glue("k_2.5_power_0.5_ntree_200_sparsetrue_sqrt"),
+#   save_path = getwd()
+# )
+# print(model_metrics$horizon_metrics)
 
 
 
+# Run the grid search
+# results <- grid_search_bart(
+#   k_range = seq(0.5, 3, by = 0.5),
+#   power_range = seq(0.5, 3, by = 0.5),
+#   ntree_range = seq(50, 300, by = 50)
+# )
+# 
+# vis <- visualize_grid_search_results()
 
+# best_model trained
+# best_model <- readRDS("best_model/best_bart_model.rds")
 
+# best model predictions
+# best_predictions <- readRDS("best_model/best_model_predictions.rds")
+
+# best model metrics
+# best_metrics <- read.csv("model_metrics/k_2.5_power_0.5_ntree_200_horizon_metrics.csv")
 
