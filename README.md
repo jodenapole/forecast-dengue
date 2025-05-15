@@ -10,8 +10,8 @@ This project implements a machine learning model to forecast dengue fever cases 
 
 The model uses two primary data sources via the MosqLimate API:
 
-1. **Climate Data (2019-2023)**: Weekly temperature and humidity metrics
-2. **Dengue Case Data (2019-2023)**: Weekly reported dengue cases
+1. **Climate Data (2011-2023)**: Weekly temperature and humidity metrics
+2. **Dengue Case Data (2011-2023)**: Weekly reported dengue cases
 
 ## Methodology
 
