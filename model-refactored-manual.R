@@ -15,8 +15,7 @@ library(parallel)
 library(forecast)
 library(tidyr)
 library(ggrepel)
-library(gtrendsR)
-        
+
 # Get API key
 API_KEY <- Sys.getenv("MOSQLIMATE_API_KEY")
 
@@ -51,7 +50,8 @@ collect_and_normalize_gtrends <- function() {
     list(start = "2021-06-27", end = "2022-03-27", name = "2021_Q3-2022_Q1"),
     list(start = "2021-12-26", end = "2022-09-25", name = "2022_Q1-Q3"),
     list(start = "2022-06-26", end = "2023-03-26", name = "2022_Q3-2023_Q1"),
-    list(start = "2023-01-01", end = "2023-12-31", name = "2023_Q1-Q4")  # Full year 2023
+    list(start = "2023-01-01", end = "2023-12-30", name = "2023_Q1-Q4"),  # Full year 2023
+    list(start = "2023-12-31", end = "2024-12-22", name = "2024_Q1-Q4")  # Full year 2024
   )
   
   # Process each period - either using gtrendsR package or loading local CSV files
@@ -262,8 +262,8 @@ api_calls <- function(api_name) {
       params <- list(
         page = pagenumber,
         per_page = 300,
-        start = 201101,  # Extended start date from 2011
-        end = 202352,
+        start = 201101, 
+        end = 202452,
         geocode = 3304557
       )
       
@@ -313,12 +313,11 @@ api_calls <- function(api_name) {
     api_response <- climate_data
   }
   
-  
   if (api_name == "dengue") {
     # API CALL FOR DENGUE CASES 2019 - 2023
     dengue_data <- data.frame()
     dengue_api <- "https://api.mosqlimate.org/api/datastore/infodengue/?disease=dengue"
-    date <- paste0("&start=2010-12-30&end=2023-12-30")
+    date <- paste0("&start=2010-12-30&end=2024-12-22")
     geocode <- paste0("&geocode=3304557")
     total_pages_estimate <- 500
     for (pagenumber in 1:total_pages_estimate) { # Loop until there are no more pages
@@ -346,7 +345,7 @@ api_calls <- function(api_name) {
     }
     api_response <- dengue_data[nrow(dengue_data):1,]
   }
-
+  
   return(api_response)
 }
 
@@ -569,7 +568,7 @@ feature_creation <- function() {
   dengue_data_ordered$precip_tot_lag7 <- dplyr::lag(climate_data$precip_tot_sum, 7)
   
   # Calculate average lag values by week of year
-  temp_weekly_avg <- dengue_data_ordered %>%
+  temp_weekly_avg <- subset(dengue_data_ordered, SE <202401) %>%
     group_by(week_of_year) %>%
     summarize(
       avg_tempmed_lag1 = mean(temp_med_lag1, na.rm = TRUE),
@@ -619,7 +618,7 @@ feature_creation <- function() {
         log(dengue_data_ordered$casos_lag1[i] / dengue_data_ordered$casos_lag2[i])
     }
   }
-
+  
   # Temperature volatility (important for vector breeding)
   dengue_data_ordered$temp_volatility <- rollapply(climate_data$temp_med_avg,
                                                    width = 4,
@@ -628,7 +627,7 @@ feature_creation <- function() {
                                                    align = "right")
   dengue_data_ordered$temp_volatility[is.na(dengue_data_ordered$temp_volatility)] <- 
     mean(dengue_data_ordered$temp_volatility, na.rm=TRUE)
-
+  
   # Sustained favorable conditions (count of consecutive weeks with optimal conditions)
   dengue_data_ordered$favorable_weeks_count <- 0
   counter <- 0
@@ -664,10 +663,10 @@ feature_creation <- function() {
     # Define previous and current climate states
     prev_temp_state <- dengue_data_ordered$temp_competence_optimality[i-1]
     curr_temp_state <- dengue_data_ordered$temp_competence_optimality[i]
-
+    
     prev_humid_state <- dengue_data_ordered$humidity_risk[i-1]
     curr_humid_state <- dengue_data_ordered$humidity_risk[i]
-
+    
     # Calculate "favorability score" for previous and current states
     prev_favorability <- prev_temp_state * prev_humid_state
     curr_favorability <- curr_temp_state * curr_humid_state
@@ -688,10 +687,10 @@ feature_creation <- function() {
       }
     }
   }
-
+  
   # Create a combined feature that indicates both if a change occurred and in which direction
   dengue_data_ordered$climate_change_context <- dengue_data_ordered$climate_state_change * dengue_data_ordered$climate_state_direction
-
+  
   # Add temporal stability - how stable have conditions been?
   dengue_data_ordered$temp_humid_risk_stability <- 0
   
@@ -699,7 +698,7 @@ feature_creation <- function() {
     recent_risk_values <- dengue_data_ordered$temp_competence_humidty_risk[(i-3):i]
     dengue_data_ordered$temp_humid_risk_stability[i] <- sd(recent_risk_values)
   }
-
+  
   # Fill first 3 values
   dengue_data_ordered$temp_humid_risk_stability[1:3] <- mean(dengue_data_ordered$temp_humid_risk_stability, 
                                                              na.rm = TRUE)
@@ -724,7 +723,7 @@ feature_creation <- function() {
   
   
   # Handle missing values - use weekly average by season
-  gtrends_weekly_avgs <- dengue_data_ordered %>%
+  gtrends_weekly_avgs <- subset(dengue_data_ordered, SE <202401) %>%
     group_by(week_of_year) %>%
     summarize(
       avg_hits = mean(hits, na.rm = TRUE),
@@ -738,20 +737,24 @@ feature_creation <- function() {
   # Fill any remaining NAs with overall averages
   gtrends_cols <- c("hits", "gtrends_lag1", "gtrends_lag2", "gtrends_lag3", "gtrends_lag4",
                     "gtrends_lag2_mov_sd")
-
+  
   for (col in gtrends_cols) {
     if (any(is.na(dengue_data_ordered[[col]]))) {
-      col_avg <- mean(dengue_data_ordered[[col]], na.rm = TRUE)
+      col_avg <- mean((subset(dengue_data_ordered, SE <202401))[[col]], na.rm = TRUE)
       dengue_data_ordered[[col]][is.na(dengue_data_ordered[[col]])] <- col_avg
     }
   }
   
   # TRAIN TEST SPLIT
   dengue_data_train <- subset(dengue_data_ordered, SE <202301)
-  dengue_data_test <- subset(dengue_data_ordered, SE >202252)
+  dengue_data_test <- head(subset(dengue_data_ordered, SE >202252), 52)
+  dengue_data_validation <- subset(dengue_data_ordered, SE > 202352)
   climate_data_train <- subset(climate_data, epiweek <202301)
-  climate_data_test <- subset(climate_data, epiweek >202252)
-
+  climate_data_test <- head(subset(climate_data, epiweek >202252), 52)
+  climate_data_validation <- subset(climate_data, epiweek >202352)
+  
+  
+  
   # ORGANAZING DATA IN TRAIN SAMPLES
   x_train <- cbind(
     dengue_data_train$casos_lag1,
@@ -835,12 +838,7 @@ feature_creation <- function() {
   
   lambda <- BoxCox.lambda(dengue_data_train$casos)
   y_train <- cbind(BoxCox(dengue_data_train$casos, lambda))
-  
-  # y_train <- as.data.frame(y_train)
-  # colnames(y_train) <- c(
-  #   "casos"
-  # )
-  
+
   y_test <- cbind(
     dengue_data_test$casos,
     dengue_data_test$hits,
@@ -850,12 +848,9 @@ feature_creation <- function() {
     dengue_data_test$temp_competence_optimality,
     dengue_data_test$humidity_risk,
     dengue_data_test$temp_competence_humidty_risk,
-    # dengue_data_test$log_lag_growth,
     dengue_data_test$temp_volatility,
-    # dengue_data_test$favorable_weeks_count,
-    # dengue_data_test$climate_change_context,
     dengue_data_test$temp_humid_risk_stability
-    # dengue_data_test$optimal_conditions
+
   )
   
   y_test <- as.data.frame(y_test) # only used for reference, not to train or test.
@@ -869,21 +864,49 @@ feature_creation <- function() {
     "temp_competence_optimality",
     "humidity_risk",
     "temp_competence_humidty_risk",
-    # "log_lag_growth",
     "temp_volatility",
-    # "favorable_weeks_count",
-    # "climate_change_context",
     "temp_humid_risk_stability"
-    # "optimal_conditions"
   )
   
   y_test$week_number <- 1:52
+  
+  y_validation <- cbind(
+    dengue_data_validation$casos,
+    dengue_data_validation$hits,
+    climate_data_validation$temp_med_avg,
+    climate_data_validation$umid_med_avg,
+    climate_data_validation$precip_tot_sum,
+    dengue_data_validation$temp_competence_optimality,
+    dengue_data_validation$humidity_risk,
+    dengue_data_validation$temp_competence_humidty_risk,
+    dengue_data_validation$temp_volatility,
+    dengue_data_validation$temp_humid_risk_stability
+
+  )
+
+  y_validation <- as.data.frame(y_validation)
+
+  colnames(y_validation) <- c(
+    "casos",
+    "hits",
+    "temp_med_avg",
+    "umid_med_avg",
+    "precip_tot_sum",
+    "temp_competence_optimality",
+    "humidity_risk",
+    "temp_competence_humidty_risk",
+    "temp_volatility",
+    "temp_humid_risk_stability"
+  )
+
+  y_validation$week_number <- 1:52
   
   return(
     list(
       x_train_df = x_train_df,
       y_train = y_train,
       y_test = y_test,
+      y_validation = y_validation,
       lambda = lambda
     )
   )
@@ -894,16 +917,16 @@ bart_model <- function () {
   set.seed(7)
   burn <- 13000
   nd <- 5000
-  k_value <- 2.5
-  power_value <- 0.5
-  ntree_value <- 200L
+  k_value <- 2
+  power_value <- 1
+  ntree_value <- 100L
   post <- wbart(x_train, y_train, nskip = burn, ndpost = nd, k=k_value, power = power_value, ntree = ntree_value, sparse = FALSE)
   
   return (post)
 }
 
 # Create a function to generate predictions for a range of base weeks
-generate_predictions_across_year <- function(start_week, end_week, weeks_ahead, post) {
+generate_predictions_across_year <- function(start_week, end_week, weeks_ahead, post, y_test) {
   # Create a data frame to store all predictions
   all_predictions <- data.frame()
   
@@ -969,7 +992,7 @@ generate_predictions_across_year <- function(start_week, end_week, weeks_ahead, 
     
     # Get actual values for comparison
     actual_values <- y_test$casos[(week_base + 1):(week_base + weeks_ahead)]
-
+    
     # Temperature volatility (using 4-week window)
     current_temp_volatility <- sd(c(
       y_test$temp_med_avg[week_base],
@@ -1231,7 +1254,7 @@ generate_predictions_across_year <- function(start_week, end_week, weeks_ahead, 
         current_casos_lag1_autumn <- current_lag1 * current_is_autumn
         current_casos_lag1_winter <- current_lag1 * current_is_winter
         current_casos_lag1_spring <- current_lag1 * current_is_spring
-
+        
         current_near_season_change <- y_test$near_season_change[week_base + week]
         current_spring_to_summer_transition <- y_test$spring_to_summer_transition[week_base + week]
         
@@ -1324,7 +1347,7 @@ generate_predictions_across_year <- function(start_week, end_week, weeks_ahead, 
         current_casos_lag1_autumn <- current_lag1 * current_is_autumn
         current_casos_lag1_winter <- current_lag1 * current_is_winter
         current_casos_lag1_spring <- current_lag1 * current_is_spring
-
+        
         current_near_season_change <- y_test$near_season_change[week_base + week]
         current_spring_to_summer_transition <- y_test$spring_to_summer_transition[week_base + week]
         
@@ -1430,7 +1453,7 @@ generate_predictions_across_year <- function(start_week, end_week, weeks_ahead, 
         mov_sd <- sd(c(current_lag1, current_lag2, current_lag3))
         avg <- mean(c(current_lag1, current_lag2, current_lag3))
         wavg <- ((current_lag1 * 3) + (current_lag2 * 2) + (current_lag3)) / 6
-
+        
         if (current_lag2 > 0) {
           current_lag1_growth_rate <- (current_lag1 - current_lag2) / current_lag2
         } else { current_lag1_growth_rate <- 0 }
@@ -1462,57 +1485,15 @@ generate_predictions_across_year <- function(start_week, end_week, weeks_ahead, 
         casos_lag2 = current_lag2,
         casos_lag3 = current_lag3,
         casos_lag4 = current_lag4,
-        # gtrends_lag1 <- current_gtrends_lag1,
-        # gtrends_lag2 <- current_gtrends_lag2,
         gtrends_lag3 <- current_gtrends_lag3,
         gtrends_lag4 <- current_gtrends_lag4,
         gtrends_lag2_mov_sd <- current_gtrends_lag2_mov_sd,
-        # temp_med_lag1 = current_temp_med_lag1,
-        # temp_med_lag2 = current_temp_med_lag2,
-        # temp_med_lag3 = current_temp_med_lag3,
         temp_med_lag4 = current_temp_med_lag4,
-        # umid_med_lag1 = current_umid_med_lag1,
-        # umid_med_lag2 = current_umid_med_lag2,
-        # umid_med_lag3 = current_umid_med_lag3,
         umid_med_lag4 = current_umid_med_lag4,
-        # precip_tot_lag1 = current_precip_tot_lag1,
-        # precip_tot_lag2 = current_precip_tot_lag2,
-        # precip_tot_lag3 = current_precip_tot_lag3,
         precip_tot_lag4 = current_precip_tot_lag4,
         temp_competence_optimality = current_temp_competence_optimality,
         humidity_risk = current_humidity_risk,
         temp_competence_humidty_risk = current_temp_competence_humidty_risk,
-        # optimal_conditions = current_optimal_conditions,
-        # lag1_growth_rate = current_lag1_growth_rate,
-        # lag1_vs_lag4_growth = current_lag1_vs_lag4_growth,
-        # log_lag_growth = current_log_lag_growth,
-        # lag_sustained_growth = current_lag_sustained_growth,
-        # lag_growth_accel = current_lag_growth_accel,
-        # avg_growth_rate = current_avg_growth_rate,
-        # temp_volatility = current_temp_volatility,
-        # favorable_weeks_count = current_favorable_weeks_count,
-        # dry_then_wet = current_dry_then_wet,
-        # is_summer <- current_is_summer,
-        # is_autumn <- current_is_autumn,
-        # is_winter <- current_is_winter,
-        # is_spring <- current_is_spring,
-        # climate_change_context = current_climate_change_context,
-        # climate_improving = current_climate_improving,
-        # climate_worsening = current_climate_worsening,
-        # temp_humid_risk_summer = current_temp_humid_risk_summer,
-        # temp_humid_risk_autumn = current_temp_humid_risk_autumn,
-        # temp_humid_risk_winter = current_temp_humid_risk_winter,
-        # temp_humid_risk_spring = current_temp_humid_risk_spring,
-        # casos_lag1_summer = current_casos_lag1_summer,
-        # casos_lag1_autumn = current_casos_lag1_autumn,
-        # casos_lag1_winter = current_casos_lag1_winter, 
-        # casos_lag1_spring = current_casos_lag1_spring,
-        # near_season_change = current_near_season_change,
-        # spring_to_summer_transition = current_spring_to_summer_transition,
-        # temp_humid_risk_stability = current_temp_humid_risk_stability,
-        # temp_humid_risk_trend = current_temp_humid_risk_trend,
-        # risk_vs_8wk_avg = current_risk_vs_8wk_avg,
-        # risk_seasonal_zscore = current_risk_seasonal_zscore,
         sin_year = sin(2 * pi * week_number/52),
         cos_year = cos(2 * pi * week_number/52),
         casoslag1_mov_sd = mov_sd,
@@ -1520,7 +1501,7 @@ generate_predictions_across_year <- function(start_week, end_week, weeks_ahead, 
         wavg = wavg,
         decay = current_decay
       )
-
+      
       # Make prediction
       quantile_levels <- c(0.01, 0.025, 0.05, 0.1, 0.2, 0.25, 0.3, 0.4, 0.5, 
                            0.6, 0.7, 0.75, 0.8, 0.9, 0.95, 0.975, 0.99)
@@ -1771,8 +1752,8 @@ create_prediction_animation_year <- function(all_predictions, output_format, out
   animated_plot <- animate(p, 
                            nframes = length(base_week) * 5, 
                            fps = 5, 
-                           width = 800, 
-                           height = 600,
+                           width = 1280, 
+                           height = 720,
                            renderer = if(output_format == "gif") {
                              gifski_renderer(output_file)
                            } else if(output_format == "mp4") {
@@ -1784,7 +1765,7 @@ create_prediction_animation_year <- function(all_predictions, output_format, out
 }
 
 # Plot full year
-plot_full_year <- function(predictions) {
+plot_full_year <- function(predictions, y_test) {
   p <- ggplot() +
     # Plot the actual values as a black line
     geom_line(data = data.frame(week = 1:52, actual = y_test$casos),
@@ -2163,8 +2144,8 @@ plot_calibration <- function(all_predictions, model_name = "BART") {
 }
 
 # Simple metrics by point predicted
-horizon_metrics <- function() {
-  horizon_metrics <- all_predictions %>%
+horizon_metrics <- function(predictions) {
+  horizon_metrics <- predictions %>%
     group_by(horizon) %>%
     summarize(
       mean_ae = mean(ae),
@@ -2401,7 +2382,8 @@ grid_search_bart <- function(
           start_week = start_week, 
           end_week = end_week, 
           weeks_ahead = weeks_ahead,
-          post = current_post
+          post = current_post,
+          y_test = y_test
         )
         
         # Store metrics
@@ -2478,7 +2460,7 @@ grid_search_bart <- function(
 }
 
 # Function to visualize grid search results
-visualize_grid_search_results <- function(results_file = "final_grid_search_results.csv") {
+visualize_grid_search_results <- function(results_file = "final_grid_search_results_v2.csv") {
   # Load results
   results <- read.csv(results_file)
   
@@ -2549,7 +2531,7 @@ visualize_grid_search_results <- function(results_file = "final_grid_search_resu
 }
 
 # Function to analyze why the model is overpredicting at specific base weeks
-analyze_problem_weeks <- function(post, base_weeks = c(30), weeks_ahead = 4) {
+analyze_problem_weeks <- function(post, base_weeks, weeks_ahead, y_test) {
   # Store results
   analysis_results <- list()
   
@@ -2615,7 +2597,7 @@ analyze_problem_weeks <- function(post, base_weeks = c(30), weeks_ahead = 4) {
       }
       
       # Generate the feature values that would have been used for this prediction
-      prediction_features <- generate_feature_vector_for_analysis(base_week, horizon)
+      prediction_features <- generate_feature_vector_for_analysis(base_week, horizon, y_test)
       
       # Analyze each feature's contribution
       for (feature_name in names(prediction_features)) {
@@ -2708,7 +2690,7 @@ analyze_problem_weeks <- function(post, base_weeks = c(30), weeks_ahead = 4) {
 }
 
 # Helper function to generate feature vector for a specific week and horizon
-generate_feature_vector_for_analysis <- function(base_week, horizon) {
+generate_feature_vector_for_analysis <- function(base_week, horizon, y_test) {
   # Get recent values for prediction
   v1 <- y_test$casos[base_week]
   v2 <- y_test$casos[base_week - 1]
@@ -2888,6 +2870,8 @@ y_train <- feature_creation() %>%
   .$y_train
 y_test <- feature_creation() %>%
   .$y_test
+y_validation <- feature_creation() %>%
+.$y_validation
 lambda <- feature_creation() %>%
   .$lambda
 
@@ -2895,31 +2879,35 @@ lambda <- feature_creation() %>%
 post_model <- bart_model()
 
 # Generate predictions for all base weeks
-all_predictions <- generate_predictions_across_year(start_week = 4, end_week = 48, weeks_ahead = 4, post_model)
+all_predictions <- generate_predictions_across_year(start_week = 4, end_week = 48, weeks_ahead = 4, post_model, y_test)
 
 # Create and save the animation
 # output_format = "mp4"
-# create_prediction_animation_year(all_predictions, output_format, glue("k_2.5_power_0.5_ntree_200_sparsefalse_gtrendslag3lag4.{output_format}"))
+# create_prediction_animation_year(all_predictions, output_format, glue("k_2_power_1_ntree_100_sparsefalse_gtrendslag3lag4.{output_format}"))
 
 
 # Plots to analysis:
-# print(horizon_metrics())
+# print(horizon_metrics(all_predictions))
 # print(best_metrics)
 
-plot_full_year(all_predictions)
-plot_var_imp(post_model)
+plot_full_year(all_predictions, y_test)
+plot_var_imp(best_model)
 plot_wis_decomposition_base(all_predictions)
 plot_multi_coverage(all_predictions)
 plot_pit_histogram(all_predictions)
-plot_calibration(all_predictions)
+# plot_calibration(all_predictions)
 
+# Analyze the problematic weeks
+# problem_analysis <- analyze_problem_weeks(post_model, c(12), 4, y_test)
+
+# saveRDS(post_model, "best_model_da_shopee.rds")
 
 # Store the metrics with a descriptive name
-model_metrics <- store_model_metrics(
-  all_predictions,
-  model_name = glue("k_2.5_power_0.5_ntree_200_sparsefalse_gtrendslag3lag4"),
-  save_path = getwd()
-)
+# model_metrics <- store_model_metrics(
+#   all_predictions,
+#   model_name = glue("AAAAAAAAA"),
+#   save_path = getwd()
+# )
 # print(model_metrics$horizon_metrics)
 
 # Run the grid search
@@ -2929,22 +2917,20 @@ results <- grid_search_bart(
   ntree_range = seq(50, 300, by = 50)
 )
 
-vis <- visualize_grid_search_results()
+# vis <- visualize_grid_search_results()
 
 # best_model trained
-# best_model <- readRDS("best_model/model_k_2.5_power_0.5_ntree_200_sparsefalse_gtrendslag3lag4.rds")
+# best_model <- readRDS("best_model/MODEL_k_2_power_1_ntree_100_sparsefalse_gtrendslag3lag4.rds")
+# test_model <- readRDS("k_2.5_power_0.5_ntree_200_sparsefalse_gtrendslag3lag4/model_k_2.5_power_0.5_ntree_200_sparsefalse_gtrendslag3lag4.rds")
 
 # best model predictions
-# best_predictions <- readRDS("best_model/predictions_k_2.5_power_0.5_ntree_200_sparsefalse_gtrendslag3lag4.rds")
+# best_predictions <- readRDS("best_model/PREDICTIONS_k_2_power_1_ntree_100_sparsefalse_gtrendslag3lag4.rds")
 
 # best x_train
-# best_x_train <- readRDS("best_model/x_train_k_2.5_power_0.5_ntree_200_sparsefalse_gtrendslag3lag4")
+# best_x_train <- readRDS("best_model/X_TRAIN_k_2_power_1_ntree_100_sparsefalse_gtrendslag3lag4.rds")
 
 # best model metrics
 # best_metrics <- read.csv("model_metrics/grid_search/k_2.5_power_0.5_ntree_200_horizon_metrics.csv")
-
-# Analyze the problematic weeks
-# problem_analysis <- analyze_problem_weeks(post_model, c(13))
 
 # Correlation Analysis for casos_lag1 and Google Trends Variables
 
@@ -2995,19 +2981,5 @@ vis <- visualize_grid_search_results()
 # correlation_matrix <- cor(combined_data, use = "complete.obs")
 # print(correlation_matrix)
 # 
-# 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+#
+all.equal(best_x_train, x_train)
