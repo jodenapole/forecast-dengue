@@ -1,3 +1,4 @@
+set.seed(7)
 library("BART")
 library("MASS")
 library(httr)
@@ -15,12 +16,13 @@ library(parallel)
 library(forecast)
 library(tidyr)
 library(ggrepel)
+library(viridis)
 
 # Get API key
 API_KEY <- Sys.getenv("MOSQLIMATE_API_KEY")
 
 # FUNCTIONS #
-
+set.seed(7)
 # Function to collect and normalize Google Trends data with overlapping 9-month windows
 collect_and_normalize_gtrends <- function() {
   # Define periods for data collection (9-month windows with 3-month overlap)
@@ -362,13 +364,13 @@ feature_creation <- function() {
       
       # Apply the simplified vector competence optimality scale
       if ((temp >= 25 && temp <= 32)) {
-        # High transmission efficiency (combined your two highest categories)
+        # High transmission efficiency
         competence_scores[i] <- 3
       } else if ((temp >= 23 && temp < 25) || (temp > 32 && temp <= 34)) {
         # Moderate transmission efficiency
         competence_scores[i] <- 2
       } else {
-        # Low transmission efficiency (combined your two lowest categories)
+        # Low transmission efficiency
         competence_scores[i] <- 1
       }
     }
@@ -917,9 +919,9 @@ bart_model <- function () {
   set.seed(7)
   burn <- 13000
   nd <- 5000
-  k_value <- 2
-  power_value <- 1
-  ntree_value <- 100L
+  k_value <- 2.5
+  power_value <- 0.5
+  ntree_value <- 200L
   post <- wbart(x_train, y_train, nskip = burn, ndpost = nd, k=k_value, power = power_value, ntree = ntree_value, sparse = FALSE)
   
   return (post)
@@ -2067,6 +2069,87 @@ plot_wis_decomposition_base <- function(all_predictions, legend_offset = -0.5) {
   invisible(bp)
 }
 
+plot_wis_decomposition <- function(all_predictions) {
+  # Aggregate the components by horizon
+  require(ggplot2)
+  require(dplyr)
+  require(tidyr)
+  require(RColorBrewer)
+  
+  # Get unique horizons and sort them
+  horizons <- sort(unique(all_predictions$horizon))
+  
+  # Calculate mean values for each component by horizon
+  wis_summary <- all_predictions %>%
+    group_by(horizon) %>%
+    summarize(
+      width = mean(wis_width, na.rm = TRUE),
+      under = mean(wis_under, na.rm = TRUE),
+      over = mean(wis_over, na.rm = TRUE),
+      ae = mean(wis_ae, na.rm = TRUE),
+      total = mean(wis_score, na.rm = TRUE)
+    )
+  
+  # Reshape data for stacked bar plot
+  wis_long <- wis_summary %>%
+    pivot_longer(
+      cols = c(ae, width, under, over),
+      names_to = "component",
+      values_to = "value"
+    ) %>%
+    mutate(component = factor(component, 
+                              levels = c("ae", "width", "under", "over"),
+                              labels = c("Absolute Error", "Interval Width", 
+                                         "Underprediction Penalty", "Overprediction Penalty")))
+  
+  # Set up colors (matching the RColorBrewer "Set2" palette used in the original)
+  colors <- brewer.pal(4, "Set2")
+  
+  # Create the plot
+  p <- ggplot() +
+    # Add stacked bars for components
+    geom_bar(data = wis_long, 
+             aes(x = factor(horizon), y = value, fill = component),
+             stat = "identity", position = "stack", width = 0.7) +
+    
+    # Add line for total WIS
+    geom_line(data = wis_summary,
+              aes(x = factor(horizon), y = total, group = 1),
+              color = "black", size = 1) +
+    
+    # Add points for total WIS
+    geom_point(data = wis_summary,
+               aes(x = factor(horizon), y = total),
+               color = "black", size = 3) +
+    
+    # Add text labels for total values
+    geom_text(data = wis_summary,
+              aes(x = factor(horizon), 
+                  y = total + max(total) * 0.05,
+                  label = round(total, 1)),
+              size = 3.5) +
+    
+    # Set colors, labels, and theme
+    scale_fill_manual(values = colors) +
+    labs(title = "Weighted Interval Score Decomposition by Horizon",
+         x = "Forecast Horizon (weeks)",
+         y = "Score Component",
+         fill = "Component") +
+    theme_minimal() +
+    theme(
+      plot.title = element_text(hjust = 0.5, face = "bold", size = 14),
+      axis.title = element_text(size = 12),
+      axis.text = element_text(size = 10),
+      legend.position = "bottom",
+      legend.title = element_text(size = 11),
+      legend.text = element_text(size = 10),
+      panel.grid.major.x = element_blank(),
+      panel.border = element_rect(fill = NA, color = "gray90")
+    )
+  
+  return(p)
+}
+
 # Coverage plot for multiple interval levels
 plot_multi_coverage <- function(all_predictions) {
   # Calculate coverage by horizon for different interval levels
@@ -2405,6 +2488,22 @@ grid_search_bart <- function(
         mean_mae <- mean(horizon_metrics$mae)
         mean_coverage <- mean(horizon_metrics$coverage_95)
         
+        # Using glue to create the folder path
+        folder_path <- glue("{model_name}")
+        
+        # Create the directory if it doesn't exist
+        if (!dir.exists(glue("{folder_path}"))) {
+          dir.create(folder_path, recursive = TRUE)
+          print(glue("Created folder: {folder_path}"))
+        }
+        
+        # Now save the RDS file inside the folder
+        
+        saveRDS(current_post, glue("{folder_path}/MODEL_{model_name}.rds"))
+        saveRDS(all_predictions, glue("{folder_path}/PREDICTIONS_{model_name}.rds"))
+        saveRDS(x_train, glue("{folder_path}/X_TRAIN_{model_name}.rds"))
+        saveRDS(y_train, glue("{folder_path}/Y_TRAIN_{model_name}.rds"))
+        
         # Add to results dataframe
         results <- rbind(results, data.frame(
           k_value = k,
@@ -2443,7 +2542,7 @@ grid_search_bart <- function(
   results <- results[order(results$mean_wis), ]
   
   # Save final results
-  write.csv(results, "final_grid_search_results.csv", row.names = FALSE)
+  write.csv(results, "final_grid_search_results_v2.csv", row.names = FALSE)
   
   # Print the best hyperparameters
   cat("\n===== GRID SEARCH COMPLETED =====\n")
@@ -2460,7 +2559,7 @@ grid_search_bart <- function(
 }
 
 # Function to visualize grid search results
-visualize_grid_search_results <- function(results_file = "final_grid_search_results_v2.csv") {
+visualize_grid_search_results <- function(results_file = "final_grid_search_results.csv") {
   # Load results
   results <- read.csv(results_file)
   
@@ -2858,6 +2957,175 @@ generate_feature_vector_for_analysis <- function(base_week, horizon, y_test) {
   return(features)
 }
 
+plot_multi_baseweek_predictions <- function(all_predictions, y_test, selected_base_weeks = NULL, 
+                                            max_base_weeks = 5, prediction_color_palette = "colorbrewer",
+                                            highlight_weeks = NULL, show_ci = TRUE) {
+  require(ggplot2)
+  require(dplyr)
+  require(viridis)  # For viridis color palette
+  require(RColorBrewer)
+  
+  # Create a dataframe with all actual values for reference
+  full_actual <- data.frame(
+    week = 1:nrow(y_test),
+    actual = y_test$casos
+  )
+  
+  # Get unique base_weeks, sorted
+  all_base_weeks <- sort(unique(all_predictions$base_week))
+  
+  # If specific base weeks are not provided, select evenly distributed ones
+  if (is.null(selected_base_weeks)) {
+    if (length(all_base_weeks) > max_base_weeks) {
+      # Select evenly spaced base weeks
+      step_size <- floor(length(all_base_weeks) / max_base_weeks)
+      indices <- seq(1, length(all_base_weeks), by = step_size)
+      selected_base_weeks <- all_base_weeks[indices[1:min(max_base_weeks, length(indices))]]
+    } else {
+      selected_base_weeks <- all_base_weeks
+    }
+  } else {
+    # Ensure selected_base_weeks are valid
+    selected_base_weeks <- selected_base_weeks[selected_base_weeks %in% all_base_weeks]
+    if (length(selected_base_weeks) == 0) {
+      stop("None of the provided base weeks are valid!")
+    }
+  }
+  
+  # Filter predictions to only include selected base weeks
+  filtered_predictions <- all_predictions %>%
+    filter(base_week %in% selected_base_weeks)
+  
+  # Create a custom label for each base week
+  filtered_predictions$base_week_label <- paste0("Week ", filtered_predictions$base_week)
+  
+  # Setup colors - either viridis or a colorbrewer palette
+  n_colors <- length(selected_base_weeks)
+  if (prediction_color_palette == "viridis") {
+    color_values <- viridis(n_colors, option = "viridis")
+  } else if (prediction_color_palette %in% rownames(brewer.pal.info)) {
+    max_colors <- brewer.pal.info[prediction_color_palette, "maxcolors"]
+    if (n_colors <= max_colors) {
+      color_values <- brewer.pal(n_colors, prediction_color_palette)
+    } else {
+      color_values <- colorRampPalette(brewer.pal(max_colors, prediction_color_palette))(n_colors)
+    }
+  } else {
+    color_values <- rainbow(n_colors)
+  }
+  
+  # Create the plot
+  p <- ggplot() +
+    # Plot full year of actual values
+    geom_line(data = full_actual, aes(x = week, y = actual), 
+              color = "black", size = 1, alpha = 0.9) +
+    geom_point(data = full_actual, aes(x = week, y = actual), 
+               color = "black", alpha = 0.8, size = 2) +
+    
+    # Add confidence intervals if requested
+    {if(show_ci) geom_ribbon(data = filtered_predictions, 
+                             aes(x = prediction_week, 
+                                 ymin = lower_ci, 
+                                 ymax = upper_ci,
+                                 fill = base_week_label), 
+                             alpha = 0.1)} +
+    
+    # Plot predictions for each base week
+    geom_line(data = filtered_predictions, 
+              aes(x = prediction_week, y = predicted, 
+                  color = base_week_label, group = base_week),
+              size = 0.9, alpha = 0.8) +
+    
+    geom_point(data = filtered_predictions, 
+               aes(x = prediction_week, y = predicted, 
+                   color = base_week_label),
+               size = 2.5, alpha = 0.7) +
+    
+    # Highlight the base weeks with vertical lines
+    geom_vline(data = data.frame(base_week = selected_base_weeks,
+                                 base_week_label = paste0("Week ", selected_base_weeks)),
+               aes(xintercept = base_week, color = base_week_label),
+               linetype = "dashed", size = 0.7, alpha = 0.7) +
+    
+    # Highlight specific weeks if provided
+    {if(!is.null(highlight_weeks)) 
+      geom_vline(xintercept = highlight_weeks, 
+                 color = "darkred", linetype = "dotted", size = 1)} +
+    
+    # Add labels and theme
+    labs(title = "Comparison of Dengue Case Predictions from Multiple Base Weeks",
+         subtitle = paste("Comparing predictions made at", length(selected_base_weeks), "different starting points"),
+         x = "Week of Year",
+         y = "Number of Cases",
+         color = "Prediction Start",
+         fill = "Prediction Start") +
+    
+    scale_color_manual(values = color_values) +
+    scale_fill_manual(values = color_values) +
+    
+    theme_minimal() +
+    theme(
+      plot.title = element_text(hjust = 0.5, face = "bold", size = 14),
+      plot.subtitle = element_text(hjust = 0.5, size = 12),
+      axis.title = element_text(size = 12),
+      axis.text = element_text(size = 10),
+      legend.position = "bottom",
+      legend.title = element_text(size = 11),
+      panel.grid.minor = element_blank(),
+      panel.border = element_rect(fill = NA, color = "gray90")
+    )
+  
+  # Add specialized annotations if needed
+  if (!is.null(highlight_weeks)) {
+    # Add labels for highlighted weeks
+    highlight_data <- data.frame(
+      week = highlight_weeks,
+      y = max(full_actual$actual) * 1.05,
+      label = paste("Week", highlight_weeks)
+    )
+    
+    p <- p + 
+      geom_text(data = highlight_data,
+                aes(x = week, y = y, label = label),
+                color = "darkred", size = 3.5, fontface = "bold")
+  }
+  
+  # Add performance metrics for each base week
+  performance_summary <- filtered_predictions %>%
+    group_by(base_week, base_week_label) %>%
+    summarize(
+      RMSE = sqrt(mean((actual - predicted)^2)),
+      MAE = mean(abs(actual - predicted)),
+      Mean_WIS = mean(wis_score),
+      .groups = "drop"
+    )
+  
+  # Create a small table-like visualization for metrics
+  p_metrics <- ggplot(performance_summary, 
+                      aes(y = reorder(base_week_label, base_week))) +
+    geom_text(aes(x = 1, label = sprintf("Week %d", base_week)), 
+              hjust = 0, size = 3.5) +
+    geom_text(aes(x = 2, label = sprintf("RMSE: %.1f", RMSE)), 
+              hjust = 0, size = 3.5) +
+    geom_text(aes(x = 3, label = sprintf("MAE: %.1f", MAE)), 
+              hjust = 0, size = 3.5) +
+    geom_text(aes(x = 4, label = sprintf("WIS: %.1f", Mean_WIS)), 
+              hjust = 0, size = 3.5) +
+    scale_x_continuous(limits = c(0.5, 5)) +
+    theme_void() +
+    labs(title = "Performance Metrics by Base Week") +
+    theme(
+      plot.title = element_text(hjust = 0.5, size = 12, face = "bold"),
+      plot.margin = margin(10, 10, 10, 10)
+    )
+  
+  return(list(
+    main_plot = p,
+    metrics_plot = p_metrics
+  ))
+}
+
+set.seed(7)
 
 # CREATING IMPORTANT VARIABLES #
 gtrends_results <- collect_and_normalize_gtrends()
@@ -2882,20 +3150,23 @@ post_model <- bart_model()
 all_predictions <- generate_predictions_across_year(start_week = 4, end_week = 48, weeks_ahead = 4, post_model, y_test)
 
 # Create and save the animation
-# output_format = "mp4"
-# create_prediction_animation_year(all_predictions, output_format, glue("k_2_power_1_ntree_100_sparsefalse_gtrendslag3lag4.{output_format}"))
+output_format = "mp4"
+create_prediction_animation_year(all_predictions, output_format, glue("k_2.5_power_0.5_ntree_200.{output_format}"))
 
 
 # Plots to analysis:
-# print(horizon_metrics(all_predictions))
+  # print(horizon_metrics(all_predictions))
 # print(best_metrics)
 
 plot_full_year(all_predictions, y_test)
-plot_var_imp(best_model)
-plot_wis_decomposition_base(all_predictions)
+plot_var_imp(post_model)
+plot_wis_decomposition(all_predictions)
 plot_multi_coverage(all_predictions)
 plot_pit_histogram(all_predictions)
-# plot_calibration(all_predictions)
+plot_calibration(all_predictions)
+results <- plot_multi_baseweek_predictions(all_predictions, y_test, 
+                                           selected_base_weeks = c(6, 16, 26, 36, 46))
+print(results$main_plot)  # Main visualization
 
 # Analyze the problematic weeks
 # problem_analysis <- analyze_problem_weeks(post_model, c(12), 4, y_test)
@@ -2903,21 +3174,22 @@ plot_pit_histogram(all_predictions)
 # saveRDS(post_model, "best_model_da_shopee.rds")
 
 # Store the metrics with a descriptive name
-# model_metrics <- store_model_metrics(
-#   all_predictions,
-#   model_name = glue("AAAAAAAAA"),
-#   save_path = getwd()
-# )
+model_metrics <- store_model_metrics(
+  all_predictions,
+  model_name = glue("k_3_power_1.5_ntree_100"),
+  save_path = getwd()
+)
 # print(model_metrics$horizon_metrics)
 
 # Run the grid search
+set.seed(7)
 results <- grid_search_bart(
   k_range = seq(0.5, 3, by = 0.5),
   power_range = seq(0.5, 3, by = 0.5),
   ntree_range = seq(50, 300, by = 50)
 )
 
-# vis <- visualize_grid_search_results()
+vis <- visualize_grid_search_results()
 
 # best_model trained
 # best_model <- readRDS("best_model/MODEL_k_2_power_1_ntree_100_sparsefalse_gtrendslag3lag4.rds")
@@ -2982,4 +3254,4 @@ results <- grid_search_bart(
 # print(correlation_matrix)
 # 
 #
-all.equal(best_x_train, x_train)
+# all.equal(best_x_train, x_train)
