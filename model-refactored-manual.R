@@ -713,6 +713,7 @@ feature_creation <- function() {
   dengue_data_ordered$gtrends_lag2 <- dplyr::lag(dengue_data_ordered$hits, 2)
   dengue_data_ordered$gtrends_lag3 <- dplyr::lag(dengue_data_ordered$hits, 3)
   dengue_data_ordered$gtrends_lag4 <- dplyr::lag(dengue_data_ordered$hits, 4)
+  dengue_data_ordered$gtrends_lag5 <- dplyr::lag(dengue_data_ordered$hits, 5)
   
   # Create moving average features
   dengue_data_ordered$gtrends_lag2_mov_sd <- rollapply(
@@ -733,11 +734,12 @@ feature_creation <- function() {
       avg_gtrends_lag2 = mean(gtrends_lag2, na.rm = TRUE),
       avg_gtrends_lag3 = mean(gtrends_lag3, na.rm = TRUE),
       avg_gtrends_lag4 = mean(gtrends_lag4, na.rm = TRUE),
+      avg_gtrends_lag5 = mean(gtrends_lag5, na.rm = TRUE),
       avg_gtrends_lag2_mov_sd = mean(gtrends_lag2_mov_sd, na.rm = TRUE)
     )
   
   # Fill any remaining NAs with overall averages
-  gtrends_cols <- c("hits", "gtrends_lag1", "gtrends_lag2", "gtrends_lag3", "gtrends_lag4",
+  gtrends_cols <- c("hits", "gtrends_lag1", "gtrends_lag2", "gtrends_lag3", "gtrends_lag4", "gtrends_lag5",
                     "gtrends_lag2_mov_sd")
   
   for (col in gtrends_cols) {
@@ -779,6 +781,7 @@ feature_creation <- function() {
     # dengue_data_train$gtrends_lag2,
     dengue_data_train$gtrends_lag3,
     dengue_data_train$gtrends_lag4,
+    dengue_data_train$gtrends_lag5,
     dengue_data_train$gtrends_lag2_mov_sd,
     dengue_data_train$temp_competence_optimality,
     dengue_data_train$humidity_risk,
@@ -820,6 +823,7 @@ feature_creation <- function() {
     # "gtrends_lag2",
     "gtrends_lag3",
     "gtrends_lag4",
+    "gtrends_lag5",
     "gtrends_lag2_mov_sd",
     "temp_competence_optimality",
     "humidity_risk",
@@ -844,6 +848,7 @@ feature_creation <- function() {
   y_test <- cbind(
     dengue_data_test$casos,
     dengue_data_test$hits,
+    dengue_data_test$gtrends_lag5,
     climate_data_test$temp_med_avg,
     climate_data_test$umid_med_avg,
     climate_data_test$precip_tot_sum,
@@ -860,6 +865,7 @@ feature_creation <- function() {
   colnames(y_test) <- c(
     "casos",
     "hits",
+    "gtrends_lag5",
     "temp_med_avg",
     "umid_med_avg",
     "precip_tot_sum",
@@ -919,16 +925,16 @@ bart_model <- function () {
   set.seed(7)
   burn <- 13000
   nd <- 5000
-  k_value <- 2.5
+  k_value <- 0.5
   power_value <- 0.5
-  ntree_value <- 200L
+  ntree_value <- 50L
   post <- wbart(x_train, y_train, nskip = burn, ndpost = nd, k=k_value, power = power_value, ntree = ntree_value, sparse = FALSE)
   
   return (post)
 }
 
 # Create a function to generate predictions for a range of base weeks
-generate_predictions_across_year <- function(start_week, end_week, weeks_ahead, post, y_test) {
+generate_predictions_across_year <- function(start_week, end_week, weeks_ahead, post, y_test, model_type) {
   # Create a data frame to store all predictions
   all_predictions <- data.frame()
   
@@ -1025,6 +1031,7 @@ generate_predictions_across_year <- function(start_week, end_week, weeks_ahead, 
         current_gtrends_lag2 <- y_test$hits[week_base - 1] 
         current_gtrends_lag3 <- y_test$hits[week_base - 2] 
         current_gtrends_lag4 <- y_test$hits[week_base - 3] 
+        current_gtrends_lag5 <- y_test$gtrends_lag5
         current_gtrends_lag2_mov_sd <- sd(c(current_gtrends_lag2, current_gtrends_lag3, current_gtrends_lag4))
         
         if (current_lag1 < current_lag2 && current_lag2 < current_lag3) {
@@ -1117,6 +1124,7 @@ generate_predictions_across_year <- function(start_week, end_week, weeks_ahead, 
         current_gtrends_lag2 <- y_test$hits[week_base - 1] 
         current_gtrends_lag3 <- y_test$hits[week_base - 2] 
         current_gtrends_lag4 <- y_test$hits[week_base - 3] 
+        current_gtrends_lag5 <- y_test$gtrends_lag5
         current_gtrends_lag2_mov_sd <- sd(c(current_gtrends_lag2, current_gtrends_lag3, current_gtrends_lag4))
         
         if (current_lag1 < current_lag2 && current_lag2 < current_lag3) {
@@ -1210,6 +1218,7 @@ generate_predictions_across_year <- function(start_week, end_week, weeks_ahead, 
         current_gtrends_lag2 <- y_test$hits[week_base - 1] 
         current_gtrends_lag3 <- y_test$hits[week_base - 2] 
         current_gtrends_lag4 <- y_test$hits[week_base - 3] 
+        current_gtrends_lag5 <- y_test$gtrends_lag5
         current_gtrends_lag2_mov_sd <- sd(c(current_gtrends_lag2, current_gtrends_lag3, current_gtrends_lag4))
         
         if (current_lag1 < current_lag2 && current_lag2 < current_lag3) {
@@ -1303,6 +1312,7 @@ generate_predictions_across_year <- function(start_week, end_week, weeks_ahead, 
         current_gtrends_lag2 <- y_test$hits[week_base - 1] 
         current_gtrends_lag3 <- y_test$hits[week_base - 2] 
         current_gtrends_lag4 <- y_test$hits[week_base - 3] 
+        current_gtrends_lag5 <- y_test$gtrends_lag5
         current_gtrends_lag2_mov_sd <- sd(c(current_gtrends_lag2, current_gtrends_lag3, current_gtrends_lag4))
         
         if (current_lag1 < current_lag2 && current_lag2 < current_lag3) {
@@ -1396,6 +1406,7 @@ generate_predictions_across_year <- function(start_week, end_week, weeks_ahead, 
         current_gtrends_lag2 <- y_test$hits[week_base - 1] 
         current_gtrends_lag3 <- y_test$hits[week_base - 2] 
         current_gtrends_lag4 <- y_test$hits[week_base - 3] 
+        current_gtrends_lag5 <- y_test$gtrends_lag5
         current_gtrends_lag2_mov_sd <- sd(c(current_gtrends_lag2, current_gtrends_lag3, current_gtrends_lag4))
         
         if (current_lag1 < current_lag2 && current_lag2 < current_lag3) {
@@ -1482,27 +1493,88 @@ generate_predictions_across_year <- function(start_week, end_week, weeks_ahead, 
       }
       
       # Create prediction data
-      recursive_data <- data.frame(
-        casos_lag1 = current_lag1,
-        casos_lag2 = current_lag2,
-        casos_lag3 = current_lag3,
-        casos_lag4 = current_lag4,
-        gtrends_lag3 <- current_gtrends_lag3,
-        gtrends_lag4 <- current_gtrends_lag4,
-        gtrends_lag2_mov_sd <- current_gtrends_lag2_mov_sd,
-        temp_med_lag4 = current_temp_med_lag4,
-        umid_med_lag4 = current_umid_med_lag4,
-        precip_tot_lag4 = current_precip_tot_lag4,
-        temp_competence_optimality = current_temp_competence_optimality,
-        humidity_risk = current_humidity_risk,
-        temp_competence_humidty_risk = current_temp_competence_humidty_risk,
-        sin_year = sin(2 * pi * week_number/52),
-        cos_year = cos(2 * pi * week_number/52),
-        casoslag1_mov_sd = mov_sd,
-        avg = avg,
-        wavg = wavg,
-        decay = current_decay
-      )
+      if (model_type == "historical") {
+        recursive_data <- data.frame(
+          casos_lag1 = current_lag1,
+          casos_lag2 = current_lag2,
+          casos_lag3 = current_lag3,
+          casos_lag4 = current_lag4,
+          sin_year = sin(2 * pi * week_number/52),
+          cos_year = cos(2 * pi * week_number/52),
+          casoslag1_mov_sd = mov_sd,
+          avg = avg,
+          wavg = wavg,
+          decay = current_decay
+        )
+      }
+      
+      if (model_type == "climate_historical") {
+        recursive_data <- data.frame(
+          casos_lag1 = current_lag1,
+          casos_lag2 = current_lag2,
+          casos_lag3 = current_lag3,
+          casos_lag4 = current_lag4,
+          temp_med_lag4 = current_temp_med_lag4,
+          umid_med_lag4 = current_umid_med_lag4,
+          precip_tot_lag4 = current_precip_tot_lag4,
+          temp_competence_optimality = current_temp_competence_optimality,
+          humidity_risk = current_humidity_risk,
+          temp_competence_humidty_risk = current_temp_competence_humidty_risk,
+          sin_year = sin(2 * pi * week_number/52),
+          cos_year = cos(2 * pi * week_number/52),
+          casoslag1_mov_sd = mov_sd,
+          avg = avg,
+          wavg = wavg,
+          decay = current_decay
+        )
+      }
+      
+      if (model_type == "gtrends_historical") {
+        recursive_data <- data.frame(
+          casos_lag1 = current_lag1,
+          casos_lag2 = current_lag2,
+          casos_lag3 = current_lag3,
+          casos_lag4 = current_lag4,
+          gtrends_lag3 <- current_gtrends_lag3,
+          gtrends_lag4 <- current_gtrends_lag4,
+          gtrends_lag2_mov_sd <- current_gtrends_lag2_mov_sd,
+          sin_year = sin(2 * pi * week_number/52),
+          cos_year = cos(2 * pi * week_number/52),
+          casoslag1_mov_sd = mov_sd,
+          avg = avg,
+          wavg = wavg,
+          decay = current_decay
+        )
+      }
+      
+      if (model_type == "climate_gtrends_historical") {
+        recursive_data <- data.frame(
+          casos_lag1 = current_lag1,
+          casos_lag2 = current_lag2,
+          casos_lag3 = current_lag3,
+          casos_lag4 = current_lag4,
+          # temp_med_lag3 = current_temp_med_lag3,
+          temp_med_lag4 = current_temp_med_lag4,
+          # umid_med_lag3 = current_umid_med_lag3,
+          umid_med_lag4 = current_umid_med_lag4,
+          # precip_tot_lag3 = current_precip_tot_lag3,
+          precip_tot_lag4 = current_precip_tot_lag4,
+          gtrends_lag3 = current_gtrends_lag3,
+          gtrends_lag4 = current_gtrends_lag4,
+          gtrends_lag5 = current_gtrends_lag5,
+          gtrends_lag2_mov_sd <- current_gtrends_lag2_mov_sd,
+          temp_competence_optimality = current_temp_competence_optimality,
+          humidity_risk = current_humidity_risk,
+          temp_competence_humidty_risk = current_temp_competence_humidty_risk,
+          sin_year = sin(2 * pi * week_number/52),
+          cos_year = cos(2 * pi * week_number/52),
+          casoslag1_mov_sd = mov_sd,
+          avg = avg,
+          wavg = wavg,
+          decay = current_decay
+        )
+      }
+    
       
       # Make prediction
       quantile_levels <- c(0.01, 0.025, 0.05, 0.1, 0.2, 0.25, 0.3, 0.4, 0.5, 
@@ -1816,6 +1888,7 @@ plot_var_imp <- function(model) {
     "precip_tot_lag4",
     "gtrends_lag3",
     "gtrends_lag4",
+    "gtrends_lag5",
     "gtrends_lag2_mov_sd",
     "temp_competence_optimality",
     "humidity_risk",
@@ -1839,9 +1912,8 @@ plot_var_imp <- function(model) {
   ggplot(importance_df, aes(x = reorder(Variable, Importance), y = Importance)) + # reorder for descending order
     geom_bar(stat = "identity", fill = "skyblue") +
     coord_flip() + # Horizontal bars for easier reading of labels
-    labs(title = "Variable Importance (%)",
-         x = "Variable",
-         y = "Importance") +
+    labs(x = "Variável",
+         y = "Importância") +
     theme_bw() # Clean theme
   
 }
@@ -2099,8 +2171,8 @@ plot_wis_decomposition <- function(all_predictions) {
     ) %>%
     mutate(component = factor(component, 
                               levels = c("ae", "width", "under", "over"),
-                              labels = c("Absolute Error", "Interval Width", 
-                                         "Underprediction Penalty", "Overprediction Penalty")))
+                              labels = c("Erro Absoluto", "Largura do Intervalo", 
+                                         "Penalidade por Submestimação", "Penalidade por Superestimação")))
   
   # Set up colors (matching the RColorBrewer "Set2" palette used in the original)
   colors <- brewer.pal(4, "Set2")
@@ -2131,10 +2203,10 @@ plot_wis_decomposition <- function(all_predictions) {
     
     # Set colors, labels, and theme
     scale_fill_manual(values = colors) +
-    labs(title = "Weighted Interval Score Decomposition by Horizon",
-         x = "Forecast Horizon (weeks)",
-         y = "Score Component",
-         fill = "Component") +
+    labs(
+         x = "Horizonte (semanas)",
+         y = "Magnitude do componente",
+         fill = "Componente") +
     theme_minimal() +
     theme(
       plot.title = element_text(hjust = 0.5, face = "bold", size = 14),
@@ -2168,7 +2240,7 @@ plot_multi_coverage <- function(all_predictions) {
       nominal_level = as.numeric(gsub("coverage_", "", interval)) / 100,
       interval = factor(interval, 
                         levels = c("coverage_50", "coverage_80", "coverage_90", "coverage_95"),
-                        labels = c("50% PI", "80% PI", "90% PI", "95% PI"))
+                        labels = c("50%", "80%", "90%", "95%"))
     )
   
   # Create coverage plot
@@ -2178,11 +2250,9 @@ plot_multi_coverage <- function(all_predictions) {
     geom_line(aes(y = nominal_level, group = interval), linetype = "dashed") +
     facet_wrap(~ interval) +
     labs(
-      title = "Prediction Interval Coverage by Horizon",
-      subtitle = "Dashed lines indicate ideal coverage levels",
-      x = "Forecast Horizon (weeks)",
-      y = "Empirical Coverage",
-      color = "Interval"
+      x = "Horizonte (semanas)",
+      y = "Cobertura empírica",
+      color = "Cobertura"
     ) +
     scale_y_continuous(limits = c(0, 1), breaks = seq(0, 1, 0.2)) +
     scale_color_brewer(palette = "Set1") +
@@ -2201,9 +2271,8 @@ plot_pit_histogram <- function(all_predictions, model_name = "BART", bins = 10) 
   p <- ggplot(all_predictions, aes(x = pit)) +
     geom_histogram(bins = bins, fill = "steelblue", color = "black") +
     labs(
-      title = paste("PIT Histogram -", model_name),
-      x = "Probability Integral Transform",
-      y = "Frequency"
+      x = "Transformada Integral de Probabilidade",
+      y = "Frequência"
     ) +
     geom_hline(yintercept = nrow(all_predictions) / bins, linetype = "dashed", color = "red") +
     theme_minimal()
@@ -2217,9 +2286,8 @@ plot_calibration <- function(all_predictions, model_name = "BART") {
     geom_point(alpha = 0.5) +
     geom_abline(intercept = 0, slope = 1, color = "red", linetype = "dashed") +
     labs(
-      title = paste("Calibration Plot -", model_name),
-      x = "Predicted Values",
-      y = "Actual Values"
+      x = "Valores Preditos",
+      y = "Valores Reais"
     ) +
     theme_minimal()
   
@@ -2396,13 +2464,15 @@ visualize_model_metrics <- function(model_name, metrics_dir = NULL) {
 }
 
 # Grid search function for BART model hyperparameter optimization
-grid_search_bart <- function(
-    k_range = seq(0.5, 3, by = 0.5),
-    power_range = seq(0.5, 3, by = 0.5),
-    ntree_range = seq(50, 300, by = 50),
-    start_week = 4,
-    end_week = 48,
-    weeks_ahead = 4
+grid_search_bart_historical <- function(
+    k_range,
+    power_range,
+    ntree_range,
+    start_week,
+    end_week,
+    weeks_ahead,
+    x_train,
+    y_train
 ) {
   # Create a dataframe to store results
   results <- data.frame(
@@ -2466,7 +2536,8 @@ grid_search_bart <- function(
           end_week = end_week, 
           weeks_ahead = weeks_ahead,
           post = current_post,
-          y_test = y_test
+          y_test = y_test,
+          model_type = "historical"
         )
         
         # Store metrics
@@ -2489,7 +2560,7 @@ grid_search_bart <- function(
         mean_coverage <- mean(horizon_metrics$coverage_95)
         
         # Using glue to create the folder path
-        folder_path <- glue("{model_name}")
+        folder_path <- glue("HISTORICAL_{model_name}")
         
         # Create the directory if it doesn't exist
         if (!dir.exists(glue("{folder_path}"))) {
@@ -2518,7 +2589,7 @@ grid_search_bart <- function(
         ))
         
         # Save intermediate results
-        write.csv(results, "grid_search_results.csv", row.names = FALSE)
+        write.csv(results, "HISTORICAL_grid_search_results.csv", row.names = FALSE)
         
         # Check if this is the best model so far
         if (mean_wis_value < best_model$mean_wis) {
@@ -2542,7 +2613,505 @@ grid_search_bart <- function(
   results <- results[order(results$mean_wis), ]
   
   # Save final results
-  write.csv(results, "final_grid_search_results_v2.csv", row.names = FALSE)
+  write.csv(results, "HISTORICAL_final_grid_search_results_v2.csv", row.names = FALSE)
+  
+  # Print the best hyperparameters
+  cat("\n===== GRID SEARCH COMPLETED =====\n")
+  cat(sprintf("Best hyperparameters found:\n"))
+  cat(sprintf("k_value: %.1f\n", best_model$k_value))
+  cat(sprintf("power_value: %.1f\n", best_model$power_value))
+  cat(sprintf("ntree_value: %d\n", best_model$ntree_value))
+  cat(sprintf("Mean WIS: %.4f\n", best_model$mean_wis))
+  
+  return(list(
+    results = results,
+    best_model = best_model
+  ))
+}
+
+# Grid search function for BART model hyperparameter optimization
+grid_search_bart_climate_historical <- function(
+    k_range,
+    power_range,
+    ntree_range,
+    start_week,
+    end_week,
+    weeks_ahead,
+    x_train,
+    y_train
+) {
+  # Create a dataframe to store results
+  results <- data.frame(
+    k_value = numeric(),
+    power_value = numeric(),
+    ntree_value = integer(),
+    mean_wis = numeric(),
+    mean_ae = numeric(),
+    rmse = numeric(),
+    mae = numeric(),
+    coverage_95 = numeric(),
+    file_path = character(),
+    stringsAsFactors = FALSE
+  )
+  
+  # Track the best model
+  best_model <- list(
+    k_value = NA,
+    power_value = NA, 
+    ntree_value = NA,
+    mean_wis = Inf,
+    post = NULL,
+    predictions = NULL
+  )
+  
+  # Total number of combinations for progress tracking
+  total_combinations <- length(k_range) * length(power_range) * length(ntree_range)
+  current_combination <- 0
+  
+  # Iterate through all combinations
+  for (k in k_range) {
+    for (power in power_range) {
+      for (ntree in ntree_range) {
+        # Update progress counter
+        current_combination <- current_combination + 1
+        model_name <- sprintf("k_%.1f_power_%.1f_ntree_%d", k, power, ntree)
+        
+        cat(sprintf("\nRunning combination %d/%d: %s\n", 
+                    current_combination, total_combinations, model_name))
+        
+        # Set hyperparameters and train model
+        set.seed(7)  # Ensure reproducibility for each run
+        burn <- 13000
+        nd <- 5000
+        
+        cat("Training BART model...\n")
+        current_post <- wbart(
+          x_train, y_train, 
+          nskip = burn, 
+          ndpost = nd, 
+          k = k, 
+          power = power, 
+          ntree = ntree, 
+          sparse = FALSE
+        )
+        
+        # Generate predictions
+        cat("Generating predictions...\n")
+        all_predictions <- generate_predictions_across_year(
+          start_week = start_week, 
+          end_week = end_week, 
+          weeks_ahead = weeks_ahead,
+          post = current_post,
+          y_test = y_test,
+          model_type = "climate_historical"
+        )
+        
+        # Store metrics
+        cat("Storing metrics...\n")
+        metrics <- store_model_metrics(
+          all_predictions,
+          model_name = model_name,
+          save_path = getwd()
+        )
+        
+        # Extract overall metrics
+        overall_metrics <- metrics$overall_metrics
+        horizon_metrics <- metrics$horizon_metrics
+        
+        # Calculate mean WIS across all horizons for comparison
+        mean_wis_value <- mean(horizon_metrics$mean_wis)
+        mean_ae_value <- mean(horizon_metrics$mean_ae)
+        mean_rmse <- mean(horizon_metrics$rmse)
+        mean_mae <- mean(horizon_metrics$mae)
+        mean_coverage <- mean(horizon_metrics$coverage_95)
+        
+        # Using glue to create the folder path
+        folder_path <- glue("CLIMATE_HISTORICAL_{model_name}")
+        
+        # Create the directory if it doesn't exist
+        if (!dir.exists(glue("{folder_path}"))) {
+          dir.create(folder_path, recursive = TRUE)
+          print(glue("Created folder: {folder_path}"))
+        }
+        
+        # Now save the RDS file inside the folder
+        
+        saveRDS(current_post, glue("{folder_path}/MODEL_{model_name}.rds"))
+        saveRDS(all_predictions, glue("{folder_path}/PREDICTIONS_{model_name}.rds"))
+        saveRDS(x_train, glue("{folder_path}/X_TRAIN_{model_name}.rds"))
+        saveRDS(y_train, glue("{folder_path}/Y_TRAIN_{model_name}.rds"))
+        
+        # Add to results dataframe
+        results <- rbind(results, data.frame(
+          k_value = k,
+          power_value = power,
+          ntree_value = ntree,
+          mean_wis = mean_wis_value,
+          mean_ae = mean_ae_value,
+          rmse = mean_rmse,
+          mae = mean_mae,
+          coverage_95 = mean_coverage,
+          file_path = metrics$files$horizon_file
+        ))
+        
+        # Save intermediate results
+        write.csv(results, "CLIMATE_HISTORICAL_grid_search_results.csv", row.names = FALSE)
+        
+        # Check if this is the best model so far
+        if (mean_wis_value < best_model$mean_wis) {
+          cat(sprintf("New best model found! Mean WIS: %.4f\n", mean_wis_value))
+          best_model$k_value <- k
+          best_model$power_value <- power
+          best_model$ntree_value <- ntree
+          best_model$mean_wis <- mean_wis_value
+          best_model$post <- current_post
+          best_model$predictions <- all_predictions
+          
+          # Save the best model
+          saveRDS(current_post, "best_bart_model.rds")
+          saveRDS(all_predictions, "best_model_predictions.rds")
+        }
+      }
+    }
+  }
+  
+  # Sort results by mean_wis (ascending)
+  results <- results[order(results$mean_wis), ]
+  
+  # Save final results
+  write.csv(results, "CLIMATE_HISTORICAL_final_grid_search_results_v2.csv", row.names = FALSE)
+  
+  # Print the best hyperparameters
+  cat("\n===== GRID SEARCH COMPLETED =====\n")
+  cat(sprintf("Best hyperparameters found:\n"))
+  cat(sprintf("k_value: %.1f\n", best_model$k_value))
+  cat(sprintf("power_value: %.1f\n", best_model$power_value))
+  cat(sprintf("ntree_value: %d\n", best_model$ntree_value))
+  cat(sprintf("Mean WIS: %.4f\n", best_model$mean_wis))
+  
+  return(list(
+    results = results,
+    best_model = best_model
+  ))
+}
+
+# Grid search function for BART model hyperparameter optimization
+grid_search_bart_gtrends_historical <- function(
+    k_range,
+    power_range,
+    ntree_range,
+    start_week,
+    end_week,
+    weeks_ahead,
+    x_train,
+    y_train
+) {
+  # Create a dataframe to store results
+  results <- data.frame(
+    k_value = numeric(),
+    power_value = numeric(),
+    ntree_value = integer(),
+    mean_wis = numeric(),
+    mean_ae = numeric(),
+    rmse = numeric(),
+    mae = numeric(),
+    coverage_95 = numeric(),
+    file_path = character(),
+    stringsAsFactors = FALSE
+  )
+  
+  # Track the best model
+  best_model <- list(
+    k_value = NA,
+    power_value = NA, 
+    ntree_value = NA,
+    mean_wis = Inf,
+    post = NULL,
+    predictions = NULL
+  )
+  
+  # Total number of combinations for progress tracking
+  total_combinations <- length(k_range) * length(power_range) * length(ntree_range)
+  current_combination <- 0
+  
+  # Iterate through all combinations
+  for (k in k_range) {
+    for (power in power_range) {
+      for (ntree in ntree_range) {
+        # Update progress counter
+        current_combination <- current_combination + 1
+        model_name <- sprintf("k_%.1f_power_%.1f_ntree_%d", k, power, ntree)
+        
+        cat(sprintf("\nRunning combination %d/%d: %s\n", 
+                    current_combination, total_combinations, model_name))
+        
+        # Set hyperparameters and train model
+        set.seed(7)  # Ensure reproducibility for each run
+        burn <- 13000
+        nd <- 5000
+        
+        cat("Training BART model...\n")
+        current_post <- wbart(
+          x_train, y_train, 
+          nskip = burn, 
+          ndpost = nd, 
+          k = k, 
+          power = power, 
+          ntree = ntree, 
+          sparse = FALSE
+        )
+        
+        # Generate predictions
+        cat("Generating predictions...\n")
+        all_predictions <- generate_predictions_across_year(
+          start_week = start_week, 
+          end_week = end_week, 
+          weeks_ahead = weeks_ahead,
+          post = current_post,
+          y_test = y_test,
+          model_type = "gtrends_historical"
+        )
+        
+        # Store metrics
+        cat("Storing metrics...\n")
+        metrics <- store_model_metrics(
+          all_predictions,
+          model_name = model_name,
+          save_path = getwd()
+        )
+        
+        # Extract overall metrics
+        overall_metrics <- metrics$overall_metrics
+        horizon_metrics <- metrics$horizon_metrics
+        
+        # Calculate mean WIS across all horizons for comparison
+        mean_wis_value <- mean(horizon_metrics$mean_wis)
+        mean_ae_value <- mean(horizon_metrics$mean_ae)
+        mean_rmse <- mean(horizon_metrics$rmse)
+        mean_mae <- mean(horizon_metrics$mae)
+        mean_coverage <- mean(horizon_metrics$coverage_95)
+        
+        # Using glue to create the folder path
+        folder_path <- glue("GTRENDS_HISTORICAL_{model_name}")
+        
+        # Create the directory if it doesn't exist
+        if (!dir.exists(glue("{folder_path}"))) {
+          dir.create(folder_path, recursive = TRUE)
+          print(glue("Created folder: {folder_path}"))
+        }
+        
+        # Now save the RDS file inside the folder
+        
+        saveRDS(current_post, glue("{folder_path}/MODEL_{model_name}.rds"))
+        saveRDS(all_predictions, glue("{folder_path}/PREDICTIONS_{model_name}.rds"))
+        saveRDS(x_train, glue("{folder_path}/X_TRAIN_{model_name}.rds"))
+        saveRDS(y_train, glue("{folder_path}/Y_TRAIN_{model_name}.rds"))
+        
+        # Add to results dataframe
+        results <- rbind(results, data.frame(
+          k_value = k,
+          power_value = power,
+          ntree_value = ntree,
+          mean_wis = mean_wis_value,
+          mean_ae = mean_ae_value,
+          rmse = mean_rmse,
+          mae = mean_mae,
+          coverage_95 = mean_coverage,
+          file_path = metrics$files$horizon_file
+        ))
+        
+        # Save intermediate results
+        write.csv(results, "GTRENDS_HISTORICAL_grid_search_results.csv", row.names = FALSE)
+        
+        # Check if this is the best model so far
+        if (mean_wis_value < best_model$mean_wis) {
+          cat(sprintf("New best model found! Mean WIS: %.4f\n", mean_wis_value))
+          best_model$k_value <- k
+          best_model$power_value <- power
+          best_model$ntree_value <- ntree
+          best_model$mean_wis <- mean_wis_value
+          best_model$post <- current_post
+          best_model$predictions <- all_predictions
+          
+          # Save the best model
+          saveRDS(current_post, "best_bart_model.rds")
+          saveRDS(all_predictions, "best_model_predictions.rds")
+        }
+      }
+    }
+  }
+  
+  # Sort results by mean_wis (ascending)
+  results <- results[order(results$mean_wis), ]
+  
+  # Save final results
+  write.csv(results, "GTRENDS_HISTORICAL_final_grid_search_results_v2.csv", row.names = FALSE)
+  
+  # Print the best hyperparameters
+  cat("\n===== GRID SEARCH COMPLETED =====\n")
+  cat(sprintf("Best hyperparameters found:\n"))
+  cat(sprintf("k_value: %.1f\n", best_model$k_value))
+  cat(sprintf("power_value: %.1f\n", best_model$power_value))
+  cat(sprintf("ntree_value: %d\n", best_model$ntree_value))
+  cat(sprintf("Mean WIS: %.4f\n", best_model$mean_wis))
+  
+  return(list(
+    results = results,
+    best_model = best_model
+  ))
+}
+
+# Grid search function for BART model hyperparameter optimization
+grid_search_bart_climate_gtrends_historical <- function(
+    k_range,
+    power_range,
+    ntree_range,
+    start_week,
+    end_week,
+    weeks_ahead,
+    x_train,
+    y_train
+) {
+  # Create a dataframe to store results
+  results <- data.frame(
+    k_value = numeric(),
+    power_value = numeric(),
+    ntree_value = integer(),
+    mean_wis = numeric(),
+    mean_ae = numeric(),
+    rmse = numeric(),
+    mae = numeric(),
+    coverage_95 = numeric(),
+    file_path = character(),
+    stringsAsFactors = FALSE
+  )
+  
+  # Track the best model
+  best_model <- list(
+    k_value = NA,
+    power_value = NA, 
+    ntree_value = NA,
+    mean_wis = Inf,
+    post = NULL,
+    predictions = NULL
+  )
+  
+  # Total number of combinations for progress tracking
+  total_combinations <- length(k_range) * length(power_range) * length(ntree_range)
+  current_combination <- 0
+  
+  # Iterate through all combinations
+  for (k in k_range) {
+    for (power in power_range) {
+      for (ntree in ntree_range) {
+        # Update progress counter
+        current_combination <- current_combination + 1
+        model_name <- sprintf("k_%.1f_power_%.1f_ntree_%d", k, power, ntree)
+        
+        cat(sprintf("\nRunning combination %d/%d: %s\n", 
+                    current_combination, total_combinations, model_name))
+        
+        # Set hyperparameters and train model
+        set.seed(7)  # Ensure reproducibility for each run
+        burn <- 13000
+        nd <- 5000
+        
+        cat("Training BART model...\n")
+        current_post <- wbart(
+          x_train, y_train, 
+          nskip = burn, 
+          ndpost = nd, 
+          k = k, 
+          power = power, 
+          ntree = ntree, 
+          sparse = FALSE
+        )
+        
+        # Generate predictions
+        cat("Generating predictions...\n")
+        all_predictions <- generate_predictions_across_year(
+          start_week = start_week, 
+          end_week = end_week, 
+          weeks_ahead = weeks_ahead,
+          post = current_post,
+          y_test = y_test,
+          model_type = "climate_gtrends_historical"
+        )
+        
+        # Store metrics
+        cat("Storing metrics...\n")
+        metrics <- store_model_metrics(
+          all_predictions,
+          model_name = model_name,
+          save_path = getwd()
+        )
+        
+        # Extract overall metrics
+        overall_metrics <- metrics$overall_metrics
+        horizon_metrics <- metrics$horizon_metrics
+        
+        # Calculate mean WIS across all horizons for comparison
+        mean_wis_value <- mean(horizon_metrics$mean_wis)
+        mean_ae_value <- mean(horizon_metrics$mean_ae)
+        mean_rmse <- mean(horizon_metrics$rmse)
+        mean_mae <- mean(horizon_metrics$mae)
+        mean_coverage <- mean(horizon_metrics$coverage_95)
+        
+        # Using glue to create the folder path
+        folder_path <- glue("CLIMATE_GTRENDS_HISTORICAL_{model_name}")
+        
+        # Create the directory if it doesn't exist
+        if (!dir.exists(glue("{folder_path}"))) {
+          dir.create(folder_path, recursive = TRUE)
+          print(glue("Created folder: {folder_path}"))
+        }
+        
+        # Now save the RDS file inside the folder
+        
+        saveRDS(current_post, glue("{folder_path}/MODEL_{model_name}.rds"))
+        saveRDS(all_predictions, glue("{folder_path}/PREDICTIONS_{model_name}.rds"))
+        saveRDS(x_train, glue("{folder_path}/X_TRAIN_{model_name}.rds"))
+        saveRDS(y_train, glue("{folder_path}/Y_TRAIN_{model_name}.rds"))
+        
+        # Add to results dataframe
+        results <- rbind(results, data.frame(
+          k_value = k,
+          power_value = power,
+          ntree_value = ntree,
+          mean_wis = mean_wis_value,
+          mean_ae = mean_ae_value,
+          rmse = mean_rmse,
+          mae = mean_mae,
+          coverage_95 = mean_coverage,
+          file_path = metrics$files$horizon_file
+        ))
+        
+        # Save intermediate results
+        write.csv(results, "CLIMATE_GTRENDS_HISTORICAL_grid_search_results.csv", row.names = FALSE)
+        
+        # Check if this is the best model so far
+        if (mean_wis_value < best_model$mean_wis) {
+          cat(sprintf("New best model found! Mean WIS: %.4f\n", mean_wis_value))
+          best_model$k_value <- k
+          best_model$power_value <- power
+          best_model$ntree_value <- ntree
+          best_model$mean_wis <- mean_wis_value
+          best_model$post <- current_post
+          best_model$predictions <- all_predictions
+          
+          # Save the best model
+          saveRDS(current_post, "best_bart_model.rds")
+          saveRDS(all_predictions, "best_model_predictions.rds")
+        }
+      }
+    }
+  }
+  
+  # Sort results by mean_wis (ascending)
+  results <- results[order(results$mean_wis), ]
+  
+  # Save final results
+  write.csv(results, "CLIMATE_GTRENDS_HISTORICAL_final_grid_search_results_v3.csv", row.names = FALSE)
   
   # Print the best hyperparameters
   cat("\n===== GRID SEARCH COMPLETED =====\n")
@@ -2997,7 +3566,7 @@ plot_multi_baseweek_predictions <- function(all_predictions, y_test, selected_ba
     filter(base_week %in% selected_base_weeks)
   
   # Create a custom label for each base week
-  filtered_predictions$base_week_label <- paste0("Week ", filtered_predictions$base_week)
+  filtered_predictions$base_week_label <- paste0("Semana ", filtered_predictions$base_week)
   
   # Setup colors - either viridis or a colorbrewer palette
   n_colors <- length(selected_base_weeks)
@@ -3043,7 +3612,7 @@ plot_multi_baseweek_predictions <- function(all_predictions, y_test, selected_ba
     
     # Highlight the base weeks with vertical lines
     geom_vline(data = data.frame(base_week = selected_base_weeks,
-                                 base_week_label = paste0("Week ", selected_base_weeks)),
+                                 base_week_label = paste0("Semana ", selected_base_weeks)),
                aes(xintercept = base_week, color = base_week_label),
                linetype = "dashed", size = 0.7, alpha = 0.7) +
     
@@ -3053,12 +3622,10 @@ plot_multi_baseweek_predictions <- function(all_predictions, y_test, selected_ba
                  color = "darkred", linetype = "dotted", size = 1)} +
     
     # Add labels and theme
-    labs(title = "Comparison of Dengue Case Predictions from Multiple Base Weeks",
-         subtitle = paste("Comparing predictions made at", length(selected_base_weeks), "different starting points"),
-         x = "Week of Year",
-         y = "Number of Cases",
-         color = "Prediction Start",
-         fill = "Prediction Start") +
+    labs(x = "Semana",
+         y = "Número de Casos",
+         color = "Semana Base",
+         fill = "Semana Base") +
     
     scale_color_manual(values = color_values) +
     scale_fill_manual(values = color_values) +
@@ -3081,7 +3648,7 @@ plot_multi_baseweek_predictions <- function(all_predictions, y_test, selected_ba
     highlight_data <- data.frame(
       week = highlight_weeks,
       y = max(full_actual$actual) * 1.05,
-      label = paste("Week", highlight_weeks)
+      label = paste("Semana", highlight_weeks)
     )
     
     p <- p + 
@@ -3142,32 +3709,84 @@ y_validation <- feature_creation() %>%
 .$y_validation
 lambda <- feature_creation() %>%
   .$lambda
+# 
+# x_train_historical <- cbind(
+#   x_train$casos_lag1,
+#   x_train$casos_lag2,
+#   x_train$casos_lag3,
+#   x_train$casos_lag4,
+#   x_train$sin_year,
+#   x_train$cos_year,
+#   x_train$casoslag1_mov_sd,
+#   x_train$avg,
+#   x_train$wavg,
+#   x_train$decay
+# )
+# 
+# x_train_climate_historical <- cbind(
+#   x_train$casos_lag1,
+#   x_train$casos_lag2,
+#   x_train$casos_lag3,
+#   x_train$casos_lag4,
+#   x_train$temp_med_lag4,
+#   x_train$umid_med_lag4,
+#   x_train$precip_tot_lag4,
+#   x_train$temp_competence_optimality,
+#   x_train$humidity_risk,
+#   x_train$temp_competence_humidty_risk,
+#   x_train$sin_year,
+#   x_train$cos_year,
+#   x_train$casoslag1_mov_sd,
+#   x_train$avg,
+#   x_train$wavg,
+#   x_train$decay
+# )
+# 
+# x_train_gtrends_historical <- cbind(
+#   x_train$casos_lag1,
+#   x_train$casos_lag2,
+#   x_train$casos_lag3,
+#   x_train$casos_lag4,
+#   x_train$gtrends_lag3,
+#   x_train$gtrends_lag4,
+#   x_train$gtrends_lag2_mov_sd,
+#   x_train$sin_year,
+#   x_train$cos_year,
+#   x_train$casoslag1_mov_sd,
+#   x_train$avg,
+#   x_train$wavg,
+#   x_train$decay
+# )
 
 # train the model from the ground up
 post_model <- bart_model()
 
 # Generate predictions for all base weeks
-all_predictions <- generate_predictions_across_year(start_week = 4, end_week = 48, weeks_ahead = 4, post_model, y_test)
+all_predictions <- generate_predictions_across_year(start_week = 4, end_week = 4, weeks_ahead = 4, post_model, y_test, "climate_gtrends_historical")
 
 # Create and save the animation
-output_format = "mp4"
-create_prediction_animation_year(all_predictions, output_format, glue("k_2.5_power_0.5_ntree_200.{output_format}"))
+# output_format = "mp4"
+# create_prediction_animation_year(all_predictions, output_format, glue("k_2.5_power_0.5_ntree_200.{output_format}"))
 
 
 # Plots to analysis:
-  # print(horizon_metrics(all_predictions))
+print(horizon_metrics(test_predictions))
 # print(best_metrics)
 
-plot_full_year(all_predictions, y_test)
-plot_var_imp(post_model)
-plot_wis_decomposition(all_predictions)
-plot_multi_coverage(all_predictions)
-plot_pit_histogram(all_predictions)
-plot_calibration(all_predictions)
-results <- plot_multi_baseweek_predictions(all_predictions, y_test, 
-                                           selected_base_weeks = c(6, 16, 26, 36, 46))
+plot_full_year(test_predictions, y_test)
+plot_var_imp(test_model)
+plot_wis_decomposition(best_predictions_gtrends_historical)
+plot_multi_coverage(best_predictions_gtrends_historical)
+plot_pit_histogram(best_predictions_gtrends_historical)
+plot_calibration(best_predictions_gtrends_historical)
+results <- plot_multi_baseweek_predictions(best_predictions_gtrends_historical, y_test, 
+                                           selected_base_weeks = c(6, 12, 23, 35, 46))
 print(results$main_plot)  # Main visualization
 
+
+# test_model <- readRDS("grid_search_v2_models/k_3.0_power_3.0_ntree_150/MODEL_k_3.0_power_3.0_ntree_150.rds")
+# 
+# test_predictions <- readRDS("grid_search_v2_models/k_3.0_power_3.0_ntree_150/PREDICTIONS_k_3.0_power_3.0_ntree_150.rds")
 # Analyze the problematic weeks
 # problem_analysis <- analyze_problem_weeks(post_model, c(12), 4, y_test)
 
@@ -3175,28 +3794,65 @@ print(results$main_plot)  # Main visualization
 
 # Store the metrics with a descriptive name
 model_metrics <- store_model_metrics(
-  all_predictions,
-  model_name = glue("k_3_power_1.5_ntree_100"),
+  best_predictions_gtrends_historical,
+  model_name = glue("best_gtrends_historical"),
   save_path = getwd()
 )
 # print(model_metrics$horizon_metrics)
 
 # Run the grid search
 set.seed(7)
-results <- grid_search_bart(
+results <- grid_search_bart_historical(
   k_range = seq(0.5, 3, by = 0.5),
   power_range = seq(0.5, 3, by = 0.5),
-  ntree_range = seq(50, 300, by = 50)
+  ntree_range = seq(50, 250, by = 50),
+  start_week = 4,
+  end_week = 48,
+  weeks_ahead = 4,
+  x_train = x_train_historical,
+  y_train = y_train
+)
+
+set.seed(7)
+results <- grid_search_bart_climate_historical(
+  k_range = seq(0.5, 3, by = 0.5),
+  power_range = seq(0.5, 3, by = 0.5),
+  ntree_range = seq(50, 250, by = 50),
+  start_week = 4,
+  end_week = 48,
+  weeks_ahead = 4,
+  x_train = x_train_climate_historical,
+  y_train = y_train
+)
+
+set.seed(7)
+results <- grid_search_bart_gtrends_historical(
+  k_range = seq(0.5, 3, by = 0.5),
+  power_range = seq(0.5, 3, by = 0.5),
+  ntree_range = seq(50, 250, by = 50),
+  start_week = 4,
+  end_week = 48,
+  weeks_ahead = 4,
+  x_train = x_train_gtrends_historical,
+  y_train = y_train
+)
+
+set.seed(7)
+results <- grid_search_bart_climate_gtrends_historical(
+  k_range = seq(2.5, 3, by = 0.5),
+  power_range = seq(0.5, 2.5, by = 0.5),
+  ntree_range = seq(50, 200, by = 50),
+  start_week = 4,
+  end_week = 48,
+  weeks_ahead = 4,
+  x_train = x_train,
+  y_train = y_train
 )
 
 vis <- visualize_grid_search_results()
 
-# best_model trained
-# best_model <- readRDS("best_model/MODEL_k_2_power_1_ntree_100_sparsefalse_gtrendslag3lag4.rds")
-# test_model <- readRDS("k_2.5_power_0.5_ntree_200_sparsefalse_gtrendslag3lag4/model_k_2.5_power_0.5_ntree_200_sparsefalse_gtrendslag3lag4.rds")
 
-# best model predictions
-# best_predictions <- readRDS("best_model/PREDICTIONS_k_2_power_1_ntree_100_sparsefalse_gtrendslag3lag4.rds")
+
 
 # best x_train
 # best_x_train <- readRDS("best_model/X_TRAIN_k_2_power_1_ntree_100_sparsefalse_gtrendslag3lag4.rds")
@@ -3206,52 +3862,59 @@ vis <- visualize_grid_search_results()
 
 # Correlation Analysis for casos_lag1 and Google Trends Variables
 
-# # Calculate correlations
-# correlations <- c(
-#   cor(y_train$casos, x_train$gtrends_lag1_mov_sd, use = "complete.obs")
-# )
-# 
-# 
-# # Create a data frame for easier visualization
-# correlation_df <- data.frame(
-#   variable = c("gtrends_lag1_mov_sd"),
-#   correlation = correlations
-# )
-# 
-# # Sort by absolute correlation strength
-# correlation_df$abs_correlation <- abs(correlation_df$correlation)
-# correlation_df <- correlation_df[order(-correlation_df$abs_correlation), ]
-# 
-# # Print the sorted correlations
-# # print(correlation_df)
-# 
-# # Create a bar plot of the correlations
-# ggplot(correlation_df, aes(x = reorder(variable, abs_correlation), y = correlation)) +
-#   geom_bar(stat = "identity", fill = "steelblue") +
-#   coord_flip() +
-#   labs(title = "Correlation of gtrends_lag1_mov_sd Variables with y_train$casos",
-#        x = "gtrends_lag1_mov_sd Variables",
-#        y = "Correlation Coefficient") +
-#   theme_minimal()
-# 
-# 
-# # Also check correlation between all variables
-# gtrends_vars <- c("casos_lag1", "hits", "gtrends_lag1", "gtrends_lag2",
-#                   "gtrends_lag3", "gtrends_lag4", "gtrends_ma3")
-# correlation_matrix <- cor(x_train[, gtrends_vars], use = "complete.obs")
-# print(correlation_matrix)
-# 
-# 
-# gtrends_vars <- c("hits", "gtrends_lag1", "gtrends_lag2",
-#                   "gtrends_lag3", "gtrends_lag4", "gtrends_ma3")
-# # For calculating correlation between transformed cases and Google Trends data
-# combined_data <- data.frame(
-#   casos_transformed = y_train,  # Box-Cox transformed cases
-#   x_train[, gtrends_vars]  # Google Trends variables
-# )
-# 
-# correlation_matrix <- cor(combined_data, use = "complete.obs")
-# print(correlation_matrix)
-# 
-#
+# Calculate correlations
+y_train_df <- as.data.frame(y_train)
+  
+colnames(y_train_df) <- cbind("casos")
+
+correlations <- c(
+  cor(y_train_df$casos, x_train$casos_lag1, use = "complete.obs"),
+  cor(y_train_df$casos, x_train$casos_lag2, use = "complete.obs"),
+  cor(y_train_df$casos, x_train$casos_lag3, use = "complete.obs"),
+  cor(y_train_df$casos, x_train$casos_lag4, use = "complete.obs")
+)
+
+
+# Create a data frame for easier visualization
+correlation_df <- data.frame(
+  variable = c("casos_lag1", "casos_lag2", "casos_lag3", "casos_lag4" ),
+  correlation = correlations
+)
+
+# Sort by absolute correlation strength
+correlation_df$abs_correlation <- abs(correlation_df$correlation)
+correlation_df <- correlation_df[order(-correlation_df$abs_correlation), ]
+
+# Print the sorted correlations
+# print(correlation_df)
+
+# Create a bar plot of the correlations
+ggplot(correlation_df, aes(x = reorder(variable, abs_correlation), y = correlation)) +
+  geom_bar(stat = "identity", fill = "steelblue") +
+  coord_flip() +
+  labs(title = "Correlation of Variables with y_train$casos",
+       x = "Variables",
+       y = "Correlation Coefficient") +
+  theme_minimal()
+
+
+# Also check correlation between all variables
+gtrends_vars <- c("casos_lag1", "hits", "gtrends_lag1", "gtrends_lag2",
+                  "gtrends_lag3", "gtrends_lag4", "gtrends_ma3")
+correlation_matrix <- cor(x_train[, gtrends_vars], use = "complete.obs")
+print(correlation_matrix)
+
+
+gtrends_vars <- c("hits", "gtrends_lag1", "gtrends_lag2",
+                  "gtrends_lag3", "gtrends_lag4", "gtrends_ma3")
+# For calculating correlation between transformed cases and Google Trends data
+combined_data <- data.frame(
+  casos_transformed = y_train,  # Box-Cox transformed cases
+  x_train[, gtrends_vars]  # Google Trends variables
+)
+
+correlation_matrix <- cor(combined_data, use = "complete.obs")
+print(correlation_matrix)
+
+
 # all.equal(best_x_train, x_train)
