@@ -253,8 +253,29 @@ collect_and_normalize_gtrends <- function() {
   ))
 }
 
+get_geocodes <- function(cidade) {
+  # Geocode lookup table
+  geocode_lookup <- data.frame(
+    city = c("rj", "sp", "for"),
+    geocode = c(3304557, 3550308, 2304400),
+    stringsAsFactors = FALSE
+  )
+  
+  # Find matching geocode
+  match_row <- geocode_lookup[geocode_lookup$city == cidade, ]
+  
+  if (nrow(match_row) > 0) {
+    return(match_row$geocode)
+  } else {
+    warning(paste("City", cidade, "not found. Available cities: rj, sp, for"))
+    return(NA)
+  }
+}
+
 # Calling API for climate and dengue
-api_calls <- function(api_name) {
+api_calls <- function(api_name, cidade) {
+  geocode <- get_geocodes(cidade)
+  
   if (api_name == "climate") {
     # API CALL FOR CLIMATE
     climate_weekly_api <- "https://api.mosqlimate.org/api/datastore/climate/weekly/"
@@ -267,7 +288,7 @@ api_calls <- function(api_name) {
         per_page = 300,
         start = 201101, 
         end = 202452,
-        geocode = 3304557
+        geocode = geocode
       )
       
       headers <- add_headers(
@@ -321,7 +342,7 @@ api_calls <- function(api_name) {
     dengue_data <- data.frame()
     dengue_api <- "https://api.mosqlimate.org/api/datastore/infodengue/?disease=dengue"
     date <- paste0("&start=2010-12-30&end=2024-12-22")
-    geocode <- paste0("&geocode=3304557")
+    geocode <- paste0(glue('&geocode={geocode}'))
     total_pages_estimate <- 500
     for (pagenumber in 1:total_pages_estimate) { # Loop until there are no more pages
       
@@ -797,6 +818,46 @@ create_train_test_splits <- function(dengue_data_engineered, climate_data_engine
     
   }
   
+  if (feature_set == "climate_historical") {
+    x_train <- cbind(
+      dengue_data_train$casos_lag1,
+      dengue_data_train$casos_lag2,
+      dengue_data_train$casos_lag3,
+      dengue_data_train$casos_lag4,
+      dengue_data_train$temp_med_lag4,
+      dengue_data_train$umid_med_lag4,
+      dengue_data_train$precip_tot_lag4,
+      dengue_data_train$temp_competence_optimality,
+      dengue_data_train$humidity_risk,
+      dengue_data_train$temp_competence_humidty_risk,
+      dengue_data_train$sin_year,
+      dengue_data_train$cos_year,
+      dengue_data_train$casoslag1_mov_sd,
+      dengue_data_train$avg,
+      dengue_data_train$wavg,
+      dengue_data_train$decay
+    )
+    
+    feature_names <- c(
+      "casos_lag1",
+      "casos_lag2",
+      "casos_lag3",
+      "casos_lag4",
+      "temp_med_lag4",
+      "umid_med_lag4",
+      "precip_tot_lag4",
+      "temp_competence_optimality",
+      "humidity_risk",
+      "temp_competence_humidty_risk",
+      "sin_year",
+      "cos_year",
+      "casoslag1_mov_sd",
+      "avg",
+      "wavg",
+      "decay"
+    )
+  }
+  
   if (feature_set == "climate_gtrends_historical") {
     x_train <- cbind(
       dengue_data_train$casos_lag1,
@@ -846,8 +907,10 @@ create_train_test_splits <- function(dengue_data_engineered, climate_data_engine
   x_train_df <- as.data.frame(x_train)
   colnames(x_train_df) <- feature_names
   
-  lambda <- BoxCox.lambda(dengue_data_train$casos)
-  y_train <- cbind(BoxCox(dengue_data_train$casos, lambda))
+  # lambda <- BoxCox.lambda(dengue_data_train$casos)
+  # y_train <- cbind(BoxCox(dengue_data_train$casos, lambda))
+  
+  y_train <- cbind(dengue_data_train$casos)
   
   # Prepare y_test and y_validation with necessary columns for prediction functions
   y_test <- cbind(
@@ -1019,6 +1082,27 @@ generate_recursive_features <- function(week, week_base, mean_predictions, y_tes
     )
   }
   
+  if (model_type == "climate_historical") {
+    recursive_data <- data.frame(
+      casos_lag1 = current_lag1,
+      casos_lag2 = current_lag2,
+      casos_lag3 = current_lag3,
+      casos_lag4 = current_lag4,
+      temp_med_lag4 = current_temp_med_lag4,
+      umid_med_lag4 = current_umid_med_lag4,
+      precip_tot_lag4 = current_precip_tot_lag4,
+      temp_competence_optimality = current_temp_competence_optimality,
+      humidity_risk = current_humidity_risk,
+      temp_competence_humidty_risk = current_temp_competence_humidty_risk,
+      sin_year = sin(2 * pi * week_number/52),
+      cos_year = cos(2 * pi * week_number/52),
+      casoslag1_mov_sd = mov_sd,
+      avg = avg,
+      wavg = wavg,
+      decay = current_decay
+    )
+  }
+  
   if (model_type == "climate_gtrends_historical") {
     recursive_data <- data.frame(
       casos_lag1 = current_lag1,
@@ -1115,23 +1199,23 @@ generate_predictions_across_year <- function(start_week, end_week, weeks_ahead, 
       quantile_levels <- c(0.01, 0.025, 0.05, 0.1, 0.2, 0.25, 0.3, 0.4, 0.5, 
                            0.6, 0.7, 0.75, 0.8, 0.9, 0.95, 0.975, 0.99)
       prediction <- predict(post, newdata = recursive_data)
-      median_prediction <- InvBoxCox(apply(prediction, 2, median), lambda)
-      mean_prediction <- InvBoxCox(apply(prediction, 2, mean), lambda)
-      li_prediction <- InvBoxCox(apply(prediction, 2, quantile, probs = 0.025), lambda)
-      ui_prediction <- InvBoxCox(apply(prediction, 2, quantile, probs = 0.975), lambda)
-      
-      # Extract all quantiles
-      q1[week] <- InvBoxCox(apply(prediction, 2, quantile, probs = 0.01), lambda)
-      q2.5[week] <- InvBoxCox(apply(prediction, 2, quantile, probs = 0.025), lambda)
-      q5[week] <- InvBoxCox(apply(prediction, 2, quantile, probs = 0.05), lambda)
-      q10[week] <- InvBoxCox(apply(prediction, 2, quantile, probs = 0.1), lambda)
-      q25[week] <- InvBoxCox(apply(prediction, 2, quantile, probs = 0.25), lambda)
-      q50[week] <- InvBoxCox(apply(prediction, 2, median), lambda)
-      q75[week] <- InvBoxCox(apply(prediction, 2, quantile, probs = 0.75), lambda)
-      q90[week] <- InvBoxCox(apply(prediction, 2, quantile, probs = 0.9), lambda)
-      q95[week] <- InvBoxCox(apply(prediction, 2, quantile, probs = 0.95), lambda)
-      q97.5[week] <- InvBoxCox(apply(prediction, 2, quantile, probs = 0.975), lambda)
-      q99[week] <- InvBoxCox(apply(prediction, 2, quantile, probs = 0.99), lambda)
+        median_prediction <- InvBoxCox(apply(prediction, 2, median), lambda)
+        mean_prediction <- InvBoxCox(apply(prediction, 2, mean), lambda)
+        li_prediction <- InvBoxCox(apply(prediction, 2, quantile, probs = 0.025), lambda)
+        ui_prediction <- InvBoxCox(apply(prediction, 2, quantile, probs = 0.975), lambda)
+        
+        # Extract all quantiles
+        q1[week] <- InvBoxCox(apply(prediction, 2, quantile, probs = 0.01), lambda)
+        q2.5[week] <- InvBoxCox(apply(prediction, 2, quantile, probs = 0.025), lambda)
+        q5[week] <- InvBoxCox(apply(prediction, 2, quantile, probs = 0.05), lambda)
+        q10[week] <- InvBoxCox(apply(prediction, 2, quantile, probs = 0.1), lambda)
+        q25[week] <- InvBoxCox(apply(prediction, 2, quantile, probs = 0.25), lambda)
+        q50[week] <- InvBoxCox(apply(prediction, 2, median), lambda)
+        q75[week] <- InvBoxCox(apply(prediction, 2, quantile, probs = 0.75), lambda)
+        q90[week] <- InvBoxCox(apply(prediction, 2, quantile, probs = 0.9), lambda)
+        q95[week] <- InvBoxCox(apply(prediction, 2, quantile, probs = 0.95), lambda)
+        q97.5[week] <- InvBoxCox(apply(prediction, 2, quantile, probs = 0.975), lambda)
+        q99[week] <- InvBoxCox(apply(prediction, 2, quantile, probs = 0.99), lambda)
       
       # Store standard predictions
       mean_predictions_2023[week] <- mean_prediction
@@ -1354,6 +1438,7 @@ grid_search_bart <- function(
   # Map feature_set to model_type for generate_predictions_across_year
   model_type_map <- list(
     "historical" = "historical",
+    "climate_historical" = "climate_historical",
     "climate_gtrends_historical" = "climate_gtrends_historical"
   )
   
@@ -2236,61 +2321,645 @@ plot_multi_baseweek_predictions <- function(all_predictions, y_test, selected_ba
   ))
 }
 
+# MODEL ENSEMBLE IMPLEMENTATION
+# Function to analyze individual model performance for any number of models
+analyze_model_performance <- function(predictions_list, model_names) {
+  cat("=== INDIVIDUAL MODEL PERFORMANCE ANALYSIS ===\n\n")
+  
+  if (length(predictions_list) != length(model_names)) {
+    stop("Number of prediction datasets must match number of model names")
+  }
+  
+  performance_summary <- data.frame(
+    Model = character(),
+    Overall_WIS = numeric(),
+    Overall_RMSE = numeric(),
+    Overall_MAE = numeric(),
+    Coverage_95 = numeric(),
+    stringsAsFactors = FALSE
+  )
+  
+  # Overall performance for each model
+  for (i in 1:length(predictions_list)) {
+    preds <- predictions_list[[i]]
+    
+    # Validate required columns
+    required_cols <- c("wis_score", "actual", "predicted", "coverage_95")
+    missing_cols <- setdiff(required_cols, colnames(preds))
+    if (length(missing_cols) > 0) {
+      stop(paste("Missing columns in model", i, ":", paste(missing_cols, collapse = ", ")))
+    }
+    
+    overall_wis <- mean(preds$wis_score, na.rm = TRUE)
+    overall_rmse <- sqrt(mean((preds$actual - preds$predicted)^2, na.rm = TRUE))
+    overall_mae <- mean(abs(preds$actual - preds$predicted), na.rm = TRUE)
+    overall_coverage <- mean(preds$coverage_95, na.rm = TRUE)
+    
+    performance_summary <- rbind(performance_summary, data.frame(
+      Model = model_names[i],
+      Overall_WIS = overall_wis,
+      Overall_RMSE = overall_rmse,
+      Overall_MAE = overall_mae,
+      Coverage_95 = overall_coverage
+    ))
+    
+    cat(sprintf("%s:\n", model_names[i]))
+    cat(sprintf("  WIS: %.3f\n", overall_wis))
+    cat(sprintf("  RMSE: %.3f\n", overall_rmse))
+    cat(sprintf("  MAE: %.3f\n", overall_mae))
+    cat(sprintf("  Coverage 95%%: %.3f\n\n", overall_coverage))
+  }
+  
+  # Performance by horizon
+  cat("Performance by Horizon:\n")
+  horizon_performance <- data.frame()
+  
+  for (i in 1:length(predictions_list)) {
+    preds <- predictions_list[[i]]
+    
+    if (!"horizon" %in% colnames(preds)) {
+      warning(paste("No 'horizon' column found in model", i, "- skipping horizon analysis"))
+      next
+    }
+    
+    horizon_stats <- preds %>%
+      group_by(horizon) %>%
+      summarize(
+        Model = model_names[i],
+        WIS = mean(wis_score, na.rm = TRUE),
+        RMSE = sqrt(mean((actual - predicted)^2, na.rm = TRUE)),
+        MAE = mean(abs(actual - predicted), na.rm = TRUE),
+        Coverage_95 = mean(coverage_95, na.rm = TRUE),
+        .groups = "drop"
+      )
+    
+    horizon_performance <- rbind(horizon_performance, horizon_stats)
+  }
+  
+  if (nrow(horizon_performance) > 0) {
+    print(horizon_performance)
+  }
+  
+  return(list(
+    overall = performance_summary,
+    by_horizon = horizon_performance
+  ))
+}
+
+# Function to calculate optimal weights for any number of models
+calculate_optimal_weights <- function(predictions_list, model_names, weight_metric = "wis") {
+  cat("=== CALCULATING OPTIMAL ENSEMBLE WEIGHTS ===\n\n")
+  
+  n_models <- length(predictions_list)
+  
+  # Determine number of horizons (assume all models have same horizons)
+  horizons <- sort(unique(predictions_list[[1]]$horizon))
+  n_horizons <- length(horizons)
+  
+  cat(sprintf("Calculating weights for %d models across %d horizons\n\n", n_models, n_horizons))
+  
+  # Initialize weights dataframe
+  weight_cols <- paste0("weight_", gsub("[^A-Za-z0-9_]", "_", model_names))
+  horizon_weights <- data.frame(horizon = horizons)
+  for (col in weight_cols) {
+    horizon_weights[[col]] <- numeric(n_horizons)
+  }
+  
+  for (h_idx in 1:n_horizons) {
+    h <- horizons[h_idx]
+    performances <- numeric(n_models)
+    
+    # Calculate performance metric for each model at this horizon
+    for (i in 1:n_models) {
+      preds_h <- predictions_list[[i]][predictions_list[[i]]$horizon == h, ]
+      
+      if (nrow(preds_h) == 0) {
+        warning(paste("No data for horizon", h, "in model", i))
+        performances[i] <- Inf  # Worst possible performance
+        next
+      }
+      
+      if (weight_metric == "wis") {
+        performances[i] <- mean(preds_h$wis_score, na.rm = TRUE)
+      } else if (weight_metric == "rmse") {
+        performances[i] <- sqrt(mean((preds_h$actual - preds_h$predicted)^2, na.rm = TRUE))
+      } else if (weight_metric == "mae") {
+        performances[i] <- mean(abs(preds_h$actual - preds_h$predicted), na.rm = TRUE)
+      } else {
+        stop(paste("Unknown weight metric:", weight_metric))
+      }
+    }
+    
+    # Convert to weights (inverse performance - lower is better)
+    # Handle infinite values
+    finite_mask <- is.finite(performances)
+    if (sum(finite_mask) == 0) {
+      # All models have infinite performance, use uniform weights
+      weights <- rep(1/n_models, n_models)
+    } else {
+      # Set infinite performances to a large value
+      performances[!finite_mask] <- max(performances[finite_mask]) * 10
+      
+      inv_performances <- 1 / performances
+      weights <- inv_performances / sum(inv_performances)
+    }
+    
+    # Store weights
+    for (i in 1:n_models) {
+      horizon_weights[[weight_cols[i]]][h_idx] <- weights[i]
+    }
+    
+    cat(sprintf("Horizon %d - %s values: [%s]\n", 
+                h, toupper(weight_metric), 
+                paste(sprintf("%.3f", performances), collapse = ", ")))
+    cat(sprintf("Horizon %d - Weights: [%s]\n\n", 
+                h, paste(sprintf("%.3f", weights), collapse = ", ")))
+  }
+  
+  cat("Final Weight Matrix:\n")
+  print(horizon_weights)
+  
+  return(horizon_weights)
+}
+
+# Main flexible ensemble function
+create_flexible_ensemble <- function(predictions_list, model_names, 
+                                     weight_metric = "wis", method = "horizon_specific") {
+  
+  if (length(predictions_list) != length(model_names)) {
+    stop("Number of prediction datasets must match number of model names")
+  }
+  
+  if (length(predictions_list) < 2) {
+    stop("Need at least 2 models for ensemble")
+  }
+  
+  n_models <- length(predictions_list)
+  cat(sprintf("Creating ensemble with %d models\n", n_models))
+  
+  # Analyze individual performance
+  performance_analysis <- analyze_model_performance(predictions_list, model_names)
+  
+  # Calculate weights based on method
+  if (method == "uniform") {
+    cat("Using uniform weights\n")
+    horizons <- sort(unique(predictions_list[[1]]$horizon))
+    weight_cols <- paste0("weight_", gsub("[^A-Za-z0-9_]", "_", model_names))
+    
+    weights <- data.frame(horizon = horizons)
+    for (col in weight_cols) {
+      weights[[col]] <- rep(1/n_models, length(horizons))
+    }
+    
+  } else if (method == "global_performance") {
+    cat("Using global performance weights\n")
+    
+    # Calculate overall performance for each model
+    overall_performances <- numeric(n_models)
+    for (i in 1:n_models) {
+      if (weight_metric == "wis") {
+        overall_performances[i] <- mean(predictions_list[[i]]$wis_score, na.rm = TRUE)
+      } else if (weight_metric == "rmse") {
+        overall_performances[i] <- sqrt(mean((predictions_list[[i]]$actual - predictions_list[[i]]$predicted)^2, na.rm = TRUE))
+      } else if (weight_metric == "mae") {
+        overall_performances[i] <- mean(abs(predictions_list[[i]]$actual - predictions_list[[i]]$predicted), na.rm = TRUE)
+      }
+    }
+    
+    # Convert to weights
+    inv_perf <- 1 / overall_performances
+    global_weights <- inv_perf / sum(inv_perf)
+    
+    horizons <- sort(unique(predictions_list[[1]]$horizon))
+    weight_cols <- paste0("weight_", gsub("[^A-Za-z0-9_]", "_", model_names))
+    
+    weights <- data.frame(horizon = horizons)
+    for (i in 1:n_models) {
+      weights[[weight_cols[i]]] <- rep(global_weights[i], length(horizons))
+    }
+    
+    cat("Global performance weights:\n")
+    names(global_weights) <- model_names
+    print(global_weights)
+    
+  } else {
+    # Horizon-specific weighting (default)
+    weights <- calculate_optimal_weights(predictions_list, model_names, weight_metric)
+  }
+  
+  # Create ensemble predictions using the first model as template
+  cat("\n=== CREATING ENSEMBLE PREDICTIONS ===\n")
+  ensemble_preds <- predictions_list[[1]]  # Start with structure from first model
+  
+  # Initialize ensemble values
+  ensemble_preds$predicted <- 0
+  ensemble_preds$lower_ci <- 0
+  ensemble_preds$upper_ci <- 0
+  
+  # Find quantile columns (they should be consistent across models)
+  quantile_cols <- grep("^q[0-9]", colnames(ensemble_preds), value = TRUE)
+  cat(sprintf("Found %d quantile columns: %s\n", length(quantile_cols), 
+              paste(quantile_cols[1:min(5, length(quantile_cols))], collapse = ", ")))
+  
+  # Initialize quantile columns
+  for (col in quantile_cols) {
+    ensemble_preds[[col]] <- 0
+  }
+  
+  # Apply weights to create ensemble predictions
+  weight_cols <- paste0("weight_", gsub("[^A-Za-z0-9_]", "_", model_names))
+  
+  for (i in 1:nrow(ensemble_preds)) {
+    h <- ensemble_preds$horizon[i]
+    
+    # Get weights for this horizon
+    weight_row <- weights[weights$horizon == h, ]
+    if (nrow(weight_row) == 0) {
+      warning(paste("No weights found for horizon", h, "- using uniform weights"))
+      model_weights <- rep(1/n_models, n_models)
+    } else {
+      model_weights <- as.numeric(weight_row[weight_cols])
+    }
+    
+    # Ensemble point predictions
+    ensemble_preds$predicted[i] <- sum(model_weights * sapply(1:n_models, function(j) predictions_list[[j]]$predicted[i]))
+    
+    # Ensemble confidence intervals
+    ensemble_preds$lower_ci[i] <- sum(model_weights * sapply(1:n_models, function(j) predictions_list[[j]]$lower_ci[i]))
+    ensemble_preds$upper_ci[i] <- sum(model_weights * sapply(1:n_models, function(j) predictions_list[[j]]$upper_ci[i]))
+    
+    # Ensemble all quantiles
+    for (col in quantile_cols) {
+      ensemble_preds[[col]][i] <- sum(model_weights * sapply(1:n_models, function(j) predictions_list[[j]][[col]][i]))
+    }
+  }
+  
+  # Recalculate ensemble metrics
+  ensemble_preds$ae <- abs(ensemble_preds$actual - ensemble_preds$predicted)
+  
+  # Recalculate interval scores and coverage
+  for (i in 1:nrow(ensemble_preds)) {
+    actual <- ensemble_preds$actual[i]
+    
+    # Recalculate coverage for different intervals
+    if ("q25" %in% quantile_cols && "q75" %in% quantile_cols) {
+      ensemble_preds$coverage_50[i] <- as.numeric(actual >= ensemble_preds$q25[i] & actual <= ensemble_preds$q75[i])
+    }
+    if ("q10" %in% quantile_cols && "q90" %in% quantile_cols) {
+      ensemble_preds$coverage_80[i] <- as.numeric(actual >= ensemble_preds$q10[i] & actual <= ensemble_preds$q90[i])
+    }
+    if ("q5" %in% quantile_cols && "q95" %in% quantile_cols) {
+      ensemble_preds$coverage_90[i] <- as.numeric(actual >= ensemble_preds$q5[i] & actual <= ensemble_preds$q95[i])
+    }
+    if ("q2.5" %in% quantile_cols && "q97.5" %in% quantile_cols) {
+      ensemble_preds$coverage_95[i] <- as.numeric(actual >= ensemble_preds$q2.5[i] & actual <= ensemble_preds$q97.5[i])
+    }
+    
+    # Recalculate WIS if we have the calculate_proper_wis function
+    if (exists("calculate_proper_wis")) {
+      quantiles_list <- list()
+      for (col in quantile_cols) {
+        # Extract the quantile level from column name
+        q_level <- gsub("q", "", col)
+        quantiles_list[[col]] <- ensemble_preds[[col]][i]
+      }
+      
+      wis_result <- calculate_proper_wis(quantiles_list, actual)
+      ensemble_preds$wis_score[i] <- wis_result$score
+    }
+  }
+  
+  # Calculate PIT for ensemble if function exists
+  if (exists("calculate_pit_enhanced")) {
+    ensemble_preds$pit <- calculate_pit_enhanced(ensemble_preds)
+  }
+  
+  # Add method label
+  ensemble_preds$method <- paste0("Ensemble_", method, "_", n_models, "models")
+  
+  cat("Ensemble created successfully!\n")
+  
+  return(list(
+    predictions = ensemble_preds,
+    weights = weights,
+    individual_performance = performance_analysis,
+    method = method,
+    n_models = n_models,
+    model_names = model_names
+  ))
+}
+
+# Function to evaluate ensemble performance against any number of individual models
+evaluate_ensemble_performance <- function(ensemble_result, predictions_list, model_names) {
+  cat("\n=== ENSEMBLE PERFORMANCE EVALUATION ===\n\n")
+  
+  ensemble_preds <- ensemble_result$predictions
+  n_models <- length(predictions_list)
+  
+  # Calculate ensemble performance
+  ensemble_wis <- mean(ensemble_preds$wis_score, na.rm = TRUE)
+  ensemble_rmse <- sqrt(mean((ensemble_preds$actual - ensemble_preds$predicted)^2, na.rm = TRUE))
+  ensemble_mae <- mean(abs(ensemble_preds$actual - ensemble_preds$predicted), na.rm = TRUE)
+  ensemble_coverage <- mean(ensemble_preds$coverage_95, na.rm = TRUE)
+  
+  # Individual model performance
+  individual_wis <- numeric(n_models)
+  individual_rmse <- numeric(n_models)
+  individual_mae <- numeric(n_models)
+  individual_coverage <- numeric(n_models)
+  
+  for (i in 1:n_models) {
+    individual_wis[i] <- mean(predictions_list[[i]]$wis_score, na.rm = TRUE)
+    individual_rmse[i] <- sqrt(mean((predictions_list[[i]]$actual - predictions_list[[i]]$predicted)^2, na.rm = TRUE))
+    individual_mae[i] <- mean(abs(predictions_list[[i]]$actual - predictions_list[[i]]$predicted), na.rm = TRUE)
+    individual_coverage[i] <- mean(predictions_list[[i]]$coverage_95, na.rm = TRUE)
+  }
+  
+  # Performance comparison
+  comparison <- data.frame(
+    Model = c(model_names, "ENSEMBLE"),
+    WIS = c(individual_wis, ensemble_wis),
+    RMSE = c(individual_rmse, ensemble_rmse),
+    MAE = c(individual_mae, ensemble_mae),
+    Coverage_95 = c(individual_coverage, ensemble_coverage)
+  )
+  
+  # Calculate improvements relative to best individual model
+  best_individual_wis <- min(individual_wis)
+  best_individual_rmse <- min(individual_rmse)
+  best_individual_mae <- min(individual_mae)
+  
+  comparison$WIS_Improvement <- c(rep(NA, n_models), 
+                                  (best_individual_wis - ensemble_wis) / best_individual_wis * 100)
+  comparison$RMSE_Improvement <- c(rep(NA, n_models), 
+                                   (best_individual_rmse - ensemble_rmse) / best_individual_rmse * 100)
+  comparison$MAE_Improvement <- c(rep(NA, n_models), 
+                                  (best_individual_mae - ensemble_mae) / best_individual_mae * 100)
+  
+  cat("Performance Comparison:\n")
+  print(comparison)
+  
+  # Horizon-specific comparison
+  cat("\nHorizon-specific Performance:\n")
+  horizon_comparison <- data.frame()
+  
+  # Add individual models
+  for (i in 1:n_models) {
+    horizon_stats <- predictions_list[[i]] %>% 
+      group_by(horizon) %>% 
+      summarize(Model = model_names[i], 
+                WIS = mean(wis_score, na.rm = TRUE),
+                RMSE = sqrt(mean((actual - predicted)^2, na.rm = TRUE)),
+                .groups = "drop")
+    horizon_comparison <- rbind(horizon_comparison, horizon_stats)
+  }
+  
+  # Add ensemble
+  ensemble_horizon_stats <- ensemble_preds %>% 
+    group_by(horizon) %>% 
+    summarize(Model = "ENSEMBLE", 
+              WIS = mean(wis_score, na.rm = TRUE),
+              RMSE = sqrt(mean((actual - predicted)^2, na.rm = TRUE)),
+              .groups = "drop")
+  
+  horizon_comparison <- rbind(horizon_comparison, ensemble_horizon_stats)
+  
+  print(horizon_comparison)
+  
+  return(list(
+    overall = comparison,
+    by_horizon = horizon_comparison
+  ))
+}
+
+# Function to visualize ensemble performance for any number of models
+plot_ensemble_comparison <- function(ensemble_result, predictions_list, model_names, y_test = NULL) {
+  require(ggplot2)
+  require(dplyr)
+  require(viridis)
+  
+  n_models <- length(predictions_list)
+  
+  # Get common columns across all datasets
+  common_cols <- Reduce(intersect, c(
+    list(colnames(ensemble_result$predictions)),
+    lapply(predictions_list, colnames)
+  ))
+  
+  cat("Common columns found:", length(common_cols), "\n")
+  
+  # Create combined dataset
+  all_predictions <- data.frame()
+  
+  # Add individual models
+  for (i in 1:n_models) {
+    model_data <- predictions_list[[i]][, common_cols] %>% 
+      mutate(model = model_names[i])
+    all_predictions <- rbind(all_predictions, model_data)
+  }
+  
+  # Add ensemble
+  ensemble_data <- ensemble_result$predictions[, common_cols] %>% 
+    mutate(model = "ENSEMBLE")
+  all_predictions <- rbind(all_predictions, ensemble_data)
+  
+  # Set factor levels for consistent plotting order
+  all_predictions$model <- factor(all_predictions$model, 
+                                  levels = c(model_names, "ENSEMBLE"))
+  
+  # Performance by horizon plot
+  horizon_performance_plot <- all_predictions %>%
+    group_by(model, horizon) %>%
+    summarize(
+      mean_wis = mean(wis_score, na.rm = TRUE),
+      mean_rmse = sqrt(mean((actual - predicted)^2, na.rm = TRUE)),
+      .groups = "drop"
+    ) %>%
+    ggplot(aes(x = horizon, y = mean_wis, color = model, group = model)) +
+    geom_line(size = 1.2) +
+    geom_point(size = 3) +
+    scale_color_viridis_d(option = "plasma", end = 0.9) +
+    labs(
+      title = paste("WIS Performance by Horizon -", n_models + 1, "Models"),
+      x = "Horizonte (semanas)",
+      y = "WIS Médio",
+      color = "Modelo"
+    ) +
+    theme_minimal() +
+    theme(legend.position = "bottom")
+  
+  # Box plot comparing all models
+  model_comparison_plot <- all_predictions %>%
+    ggplot(aes(x = model, y = wis_score, fill = model)) +
+    geom_boxplot() +
+    scale_fill_viridis_d(option = "plasma", end = 0.9) +
+    labs(
+      title = "WIS Distribution Comparison",
+      x = "Modelo",
+      y = "WIS Score"
+    ) +
+    theme_minimal() +
+    theme(
+      axis.text.x = element_text(angle = 45, hjust = 1),
+      legend.position = "none"
+    )
+  
+  # Prediction vs actual plot for ensemble only
+  pred_vs_actual_plot <- ggplot(ensemble_result$predictions, aes(x = predicted, y = actual)) +
+    geom_point(alpha = 0.6, color = "steelblue") +
+    geom_abline(intercept = 0, slope = 1, color = "red", linetype = "dashed") +
+    facet_wrap(~ paste("Horizonte", horizon)) +
+    labs(
+      title = "Ensemble: Predito vs Real",
+      x = "Valores Preditos",
+      y = "Valores Reais"
+    ) +
+    theme_minimal()
+  
+  return(list(
+    horizon_performance = horizon_performance_plot,
+    model_comparison = model_comparison_plot,
+    pred_vs_actual = pred_vs_actual_plot
+  ))
+}
+
+# Example usage function
+run_flexible_ensemble_example <- function() {
+  cat("=== FLEXIBLE ENSEMBLE EXAMPLE ===\n\n")
+  
+  # Example with your variable names (adjust as needed)
+  predictions_list <- list(
+    climate_gtrends_historical_predictions,
+    climate_historical_predictions,
+    historical_predictions
+    # Add more models here as needed
+  )
+  
+  model_names <- c(
+    "Climate+GTrends+Historical",
+    "Climate+Historical", 
+    "Historical"
+    # Add corresponding names here
+  )
+  
+  # Create ensemble with horizon-specific weights
+  ensemble_result <- create_flexible_ensemble(
+    predictions_list = predictions_list,
+    model_names = model_names,
+    weight_metric = "wis",
+    method = "horizon_specific"
+  )
+  
+  # Evaluate performance
+  performance <- evaluate_ensemble_performance(
+    ensemble_result,
+    predictions_list,
+    model_names
+  )
+  
+  # Create visualizations
+  plots <- plot_ensemble_comparison(
+    ensemble_result,
+    predictions_list,
+    model_names
+  )
+  
+  # Print plots
+  print(plots$horizon_performance)
+  print(plots$model_comparison)
+  print(plots$pred_vs_actual)
+  
+  # Store ensemble metrics
+  if (exists("store_model_metrics")) {
+    ensemble_metrics <- store_model_metrics(
+      ensemble_result$predictions,
+      model_name = paste0("ensemble_", length(predictions_list), "_models"),
+      save_path = getwd()
+    )
+  }
+  
+  return(list(
+    ensemble = ensemble_result,
+    performance = performance,
+    plots = plots
+  ))
+}
 # MAIN EXECUTION FLOW
 set.seed(7)
 
 # CREATING IMPORTANT VARIABLES #
 gtrends_results <- collect_and_normalize_gtrends()
-climate_data <- api_calls(api_name = "climate")
-dengue_data_ordered <- api_calls(api_name = "dengue")
+climate_data_sp <- api_calls(api_name = "climate", cidade = 'for')
+dengue_data_ordered_sp <- api_calls(api_name = "dengue", cidade = 'for')
 
 # Feature engineering
-engineered_data <- feature_engineering(dengue_data_ordered, climate_data, gtrends_results)
+engineered_data <- feature_engineering(dengue_data_ordered_sp, climate_data_sp, gtrends_results)
 dengue_data_engineered <- engineered_data$dengue_data_engineered
 climate_data_engineered <- engineered_data$climate_data_engineered
 
 # Create train/test splits for different feature sets
-splits_climate_gtrends <- create_train_test_splits(dengue_data_engineered, climate_data_engineered, 
+splits_climate_gtrends_historical <- create_train_test_splits(dengue_data_engineered, climate_data_engineered, 
                                                    feature_set = "climate_gtrends_historical")
 
-x_train <- splits_climate_gtrends$x_train_df
-y_train <- splits_climate_gtrends$y_train
-y_test <- splits_climate_gtrends$y_test
-y_validation <- splits_climate_gtrends$y_validation
-lambda <- splits_climate_gtrends$lambda
+x_train <- splits_climate_gtrends_historical$x_train_df
+y_train <- splits_climate_gtrends_historical$y_train
+y_test <- splits_climate_gtrends_historical$y_test
+y_validation <- splits_climate_gtrends_historical$y_validation
+lambda <- splits_climate_gtrends_historical$lambda
 
-# best_model <- readRDS("models-rj/best_model/MODEL_k_2.5_power_0.5_ntree_200.rds")
+best_model_climate_historical_rj <- readRDS("models-rj/climate_historical_model/MODEL_k_3.0_power_0.5_ntree_50.rds")
+# climate_gtrends_historical_predictions <- readRDS("CLIMATE_GTRENDS_HISTORICAL_k_1.0_power_2.0_ntree_200/PREDICTIONS_k_1.0_power_2.0_ntree_200.rds")
 # best_x_train <- readRDS("models-rj/best_model/X_TRAIN_k_2.5_power_0.5_ntree_200.rds")
 # best_y_train <- readRDS("models-rj/best_model/Y_TRAIN_k_2.5_power_0.5_ntree_200.rds")
 
 # all.equal(best_x_train, x_train)
 
 # Train the model from the ground up
-post_model <- bart_model(x_train, y_train, k = 2.5, power = 0.5, ntree = 200L)
+post_model_climate_gtrends_historical <- bart_model(x_train, y_train, k = 2.5, power = 0.5, ntree = 200L)
 
 # Generate predictions for all base weeks
-all_predictions <- generate_predictions_across_year(
-  start_week = 6, 
-  end_week = 6,
+climate_gtrends_historical_predictions <- generate_predictions_across_year(
+  start_week = 4, 
+  end_week = 48,
   weeks_ahead = 4, 
-  post_model, 
+  best_model_climate_gtrends_historical_rj, 
   y_test, 
   "climate_gtrends_historical",
   lambda
 )
 
-# Example plots and analysis
-# print(horizon_metrics(all_predictions))
-plot_full_year(all_predictions, y_test)
-plot_var_imp(post_model, splits_climate_gtrends$feature_names)
-plot_wis_decomposition(all_predictions)
-plot_multi_coverage(all_predictions)
-plot_pit_histogram(all_predictions)
-plot_calibration(all_predictions)
+climate_historical_predictions <- generate_predictions_across_year(
+  start_week = 4, 
+  end_week = 48,
+  weeks_ahead = 4, 
+  best_model_climate_historical_rj, 
+  y_test, 
+  "climate_historical",
+  lambda
+)
 
-results <- plot_multi_baseweek_predictions(all_predictions, y_test, 
-                                           selected_base_weeks = c(6, 12, 23, 35, 46))
-print(results$main_plot)
+historical_predictions <- generate_predictions_across_year(
+  start_week = 4, 
+  end_week = 48,
+  weeks_ahead = 4, 
+  best_model_historical_rj, 
+  y_test, 
+  "historical",
+  lambda
+)
+
+# Example plots and analysis
+print(horizon_metrics(climate_historical_predictions))
+plot_full_year(climate_historical_predictions, y_test)
+# plot_var_imp(post_model, splits_climate_gtrends$feature_names)
+# plot_wis_decomposition(climate_gtrends_historical_predictions)
+plot_multi_coverage(climate_gtrends_historical_predictions)
+plot_pit_histogram(climate_gtrends_historical_predictions)
+plot_calibration(climate_gtrends_historical_predictions)
+
+# results <- plot_multi_baseweek_predictions(climate_historical_predictions, y_test,
+#                                            selected_base_weeks = c(6, 12, 23, 35, 46))
+# print(results$main_plot)
 
 # Store the metrics
 model_metrics <- store_model_metrics(
@@ -2300,40 +2969,102 @@ model_metrics <- store_model_metrics(
 )
 
 # Example grid search for different feature sets
-if (TRUE) {  # Set to TRUE to run grid search
-  # # Historical features only
-  # splits_historical <- create_train_test_splits(dengue_data_engineered, climate_data_engineered, 
-  #                                               feature_set = "historical")
-  # 
-  # results_historical <- grid_search_bart(
-  #   k_range = seq(0.5, 3, by = 0.5),
-  #   power_range = seq(0.5, 3, by = 0.5),
-  #   ntree_range = seq(50, 250, by = 50),
-  #   start_week = 4,
-  #   end_week = 48,
-  #   weeks_ahead = 4,
-  #   x_train = splits_historical$x_train_df,
-  #   y_train = splits_historical$y_train,
-  #   y_test = splits_historical$y_test,
-  #   lambda = splits_historical$lambda,
-  #   feature_set = "historical"
-  # )
-  
-  # All features combined
-  results_all <- grid_search_bart(
-    k_range = seq(2.5, 3, by = 0.5),
-    power_range = seq(1, 2, by = 0.5),
-    ntree_range = seq(100, 200, by = 50),
+if (FALSE) {  # Set to TRUE to run grid search
+  # Historical features only
+  splits_historical <- create_train_test_splits(dengue_data_engineered, climate_data_engineered,
+                                                feature_set = "historical")
+
+  results_historical <- grid_search_bart(
+    k_range = seq(0.5, 3, by = 0.5),
+    power_range = seq(0.5, 3, by = 0.5),
+    ntree_range = seq(50, 250, by = 50),
     start_week = 4,
     end_week = 48,
     weeks_ahead = 4,
-    x_train = splits_climate_gtrends$x_train_df,
-    y_train = splits_climate_gtrends$y_train,
-    y_test = splits_climate_gtrends$y_test,
-    lambda = splits_climate_gtrends$lambda,
+    x_train = splits_historical$x_train_df,
+    y_train = splits_historical$y_train,
+    y_test = splits_historical$y_test,
+    lambda = splits_historical$lambda,
+    feature_set = "historical"
+  )
+  
+  splits_climate_historical <- create_train_test_splits(dengue_data_engineered, climate_data_engineered, 
+                                                feature_set = "climate_historical")
+  # All features combined
+  results_all <- grid_search_bart(
+    k_range = seq(0.5, 3, by = 0.5),
+    power_range = seq(0.5, 3, by = 0.5),
+    ntree_range = seq(50, 250, by = 50),
+    start_week = 4,
+    end_week = 48,
+    weeks_ahead = 4,
+    x_train = splits_climate_historical$x_train_df,
+    y_train = splits_climate_historical$y_train,
+    y_test = splits_climate_historical$y_test,
+    lambda = splits_climate_historical$lambda,
+    feature_set = "climate_historical"
+  )
+  
+  splits_climate_gtrends_historical <- create_train_test_splits(dengue_data_engineered, climate_data_engineered, 
+                                                        feature_set = "climate_gtrends_historical")
+  # All features combined
+  results_all <- grid_search_bart(
+    k_range = seq(0.5, 3, by = 0.5),
+    power_range = seq(0.5, 3, by = 0.5),
+    ntree_range = seq(50, 350, by = 50),
+    start_week = 4,
+    end_week = 48,
+    weeks_ahead = 4,
+    x_train = splits_climate_gtrends_historical$x_train_df,
+    y_train = splits_climate_gtrends_historical$y_train,
+    y_test = splits_climate_gtrends_historical$y_test,
+    lambda = splits_climate_gtrends_historical$lambda,
     feature_set = "climate_gtrends_historical"
   )
   
   # Visualize results
   # vis <- visualize_grid_search_results("CLIMATE_GTRENDS_HISTORICAL_final_grid_search_results.csv")
 }
+
+
+# Models to ensemble
+predictions_list <- list(climate_gtrends_historical_predictions, historical_predictions)
+model_names <- c("climate_gtrends_historical_predictions", "historical_predictions")
+
+if (FALSE) {
+  # Same function call works for any number
+  ensemble_result <- create_flexible_ensemble(
+    predictions_list = predictions_list,
+    model_names = model_names,
+    weight_metric = "wis",
+    method = "horizon_specific"
+  )
+  
+  performance_horizon <- evaluate_ensemble_performance(
+    ensemble_result,
+    predictions_list,
+    model_names
+  )
+  
+  # Create visualizations
+  plots <- plot_ensemble_comparison(
+    ensemble_result,
+    predictions_list,
+    model_names,
+    y_test
+  )
+  
+  # Print plots
+  print(plots$horizon_performance)
+  # print(plots$pred_vs_actual)
+}
+
+# Store ensemble metrics
+ensemble_metrics_horizon <- store_model_metrics(
+  ensemble_result_horizon$predictions,
+  model_name = "ensemble_horizon_specific_fortaleza",
+  save_path = getwd()
+)
+
+
+
