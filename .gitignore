@@ -15,5 +15,6 @@
 .Renviron
 *.mp4
 model_metrics
+models
 *.rds
 *.csv

@@ -256,8 +256,8 @@ collect_and_normalize_gtrends <- function() {
 get_geocodes <- function(cidade) {
   # Geocode lookup table
   geocode_lookup <- data.frame(
-    city = c("rj", "sp", "for"),
-    geocode = c(3304557, 3550308, 2304400),
+    city = c("rj", "sp", "for", "poa", "bh"),
+    geocode = c(3304557, 3550308, 2304400, 4314902, 3106200),
     stringsAsFactors = FALSE
   )
   
@@ -267,7 +267,7 @@ get_geocodes <- function(cidade) {
   if (nrow(match_row) > 0) {
     return(match_row$geocode)
   } else {
-    warning(paste("City", cidade, "not found. Available cities: rj, sp, for"))
+    warning(paste("City", cidade, "not found. Available cities: rj, sp, for, poa"))
     return(NA)
   }
 }
@@ -779,7 +779,17 @@ feature_engineering <- function(dengue_data_ordered, climate_data, gtrends_resul
 }
 
 # Function to create train/test splits with different feature sets
-create_train_test_splits <- function(dengue_data_engineered, climate_data_engineered, feature_set) {
+create_train_test_splits <- function(city, feature_set) {
+  # CREATING IMPORTANT VARIABLES #
+  gtrends_results <- collect_and_normalize_gtrends()
+  climate_data <- api_calls(api_name = "climate", cidade = city)
+  dengue_data_ordered <- api_calls(api_name = "dengue", cidade = city)
+  
+  # Feature engineering
+  engineered_data <- feature_engineering(dengue_data_ordered, climate_data, gtrends_results)
+  dengue_data_engineered <- engineered_data$dengue_data_engineered
+  climate_data_engineered <- engineered_data$climate_data_engineered
+  
   # TRAIN TEST SPLIT
   dengue_data_train <- subset(dengue_data_engineered, SE <202301)
   dengue_data_test <- head(subset(dengue_data_engineered, SE >202252), 52)
@@ -907,10 +917,10 @@ create_train_test_splits <- function(dengue_data_engineered, climate_data_engine
   x_train_df <- as.data.frame(x_train)
   colnames(x_train_df) <- feature_names
   
-  # lambda <- BoxCox.lambda(dengue_data_train$casos)
-  # y_train <- cbind(BoxCox(dengue_data_train$casos, lambda))
+  lambda <- BoxCox.lambda(dengue_data_train$casos)
+  y_train <- cbind(BoxCox(dengue_data_train$casos, lambda))
   
-  y_train <- cbind(dengue_data_train$casos)
+  # y_train <- cbind(dengue_data_train$casos)
   
   # Prepare y_test and y_validation with necessary columns for prediction functions
   y_test <- cbind(
@@ -2887,32 +2897,21 @@ run_flexible_ensemble_example <- function() {
 # MAIN EXECUTION FLOW
 set.seed(7)
 
-# CREATING IMPORTANT VARIABLES #
-gtrends_results <- collect_and_normalize_gtrends()
-climate_data_sp <- api_calls(api_name = "climate", cidade = 'for')
-dengue_data_ordered_sp <- api_calls(api_name = "dengue", cidade = 'for')
-
-# Feature engineering
-engineered_data <- feature_engineering(dengue_data_ordered_sp, climate_data_sp, gtrends_results)
-dengue_data_engineered <- engineered_data$dengue_data_engineered
-climate_data_engineered <- engineered_data$climate_data_engineered
-
 # Create train/test splits for different feature sets
-splits_climate_gtrends_historical <- create_train_test_splits(dengue_data_engineered, climate_data_engineered, 
-                                                   feature_set = "climate_gtrends_historical")
+splits <- create_train_test_splits(city = 'poa', feature_set = "climate_gtrends_historical")
 
-x_train <- splits_climate_gtrends_historical$x_train_df
-y_train <- splits_climate_gtrends_historical$y_train
-y_test <- splits_climate_gtrends_historical$y_test
-y_validation <- splits_climate_gtrends_historical$y_validation
-lambda <- splits_climate_gtrends_historical$lambda
+x_train <- splits$x_train_df
+y_train <- splits$y_train
+y_test <- splits$y_test
+y_validation <- splits$y_validation
+lambda <- splits$lambda
 
-best_model_climate_historical_rj <- readRDS("models-rj/climate_historical_model/MODEL_k_3.0_power_0.5_ntree_50.rds")
+best_model_climate_gtrends_historical_sp <- readRDS("models/models-sp/gtrends-br/CLIMATE_GTRENDS_HISTORICAL_k_1.5_power_1.0_ntree_200/MODEL_k_1.5_power_1.0_ntree_200.rds")
 # climate_gtrends_historical_predictions <- readRDS("CLIMATE_GTRENDS_HISTORICAL_k_1.0_power_2.0_ntree_200/PREDICTIONS_k_1.0_power_2.0_ntree_200.rds")
 # best_x_train <- readRDS("models-rj/best_model/X_TRAIN_k_2.5_power_0.5_ntree_200.rds")
 # best_y_train <- readRDS("models-rj/best_model/Y_TRAIN_k_2.5_power_0.5_ntree_200.rds")
 
-# all.equal(best_x_train, x_train)
+# all.equal(best_model_historical_rjaa, best_model_historical_rj)
 
 # Train the model from the ground up
 post_model_climate_gtrends_historical <- bart_model(x_train, y_train, k = 2.5, power = 0.5, ntree = 200L)
@@ -2949,13 +2948,13 @@ historical_predictions <- generate_predictions_across_year(
 )
 
 # Example plots and analysis
-print(horizon_metrics(climate_historical_predictions))
-plot_full_year(climate_historical_predictions, y_test)
+print(horizon_metrics(historical_predictions))
+plot_full_year(historical_predictions, y_test)
 # plot_var_imp(post_model, splits_climate_gtrends$feature_names)
 # plot_wis_decomposition(climate_gtrends_historical_predictions)
-plot_multi_coverage(climate_gtrends_historical_predictions)
-plot_pit_histogram(climate_gtrends_historical_predictions)
-plot_calibration(climate_gtrends_historical_predictions)
+plot_multi_coverage(historical_predictions)
+plot_pit_histogram(historical_predictions)
+plot_calibration(historical_predictions)
 
 # results <- plot_multi_baseweek_predictions(climate_historical_predictions, y_test,
 #                                            selected_base_weeks = c(6, 12, 23, 35, 46))
@@ -2963,16 +2962,17 @@ plot_calibration(climate_gtrends_historical_predictions)
 
 # Store the metrics
 model_metrics <- store_model_metrics(
-  all_predictions,
-  model_name = "best_climate_gtrends_historical",
+  historical_predictions,
+  model_name = "model_rj_predictions_sp_historical",
   save_path = getwd()
 )
+# saveRDS(current_post, glue("{folder_path}/MODEL_{model_name}.rds"))
+
 
 # Example grid search for different feature sets
-if (FALSE) {  # Set to TRUE to run grid search
+if (TRUE) {  # Set to TRUE to run grid search
   # Historical features only
-  splits_historical <- create_train_test_splits(dengue_data_engineered, climate_data_engineered,
-                                                feature_set = "historical")
+  splits_historical <- create_train_test_splits(city = 'poa', feature_set = "historical")
 
   results_historical <- grid_search_bart(
     k_range = seq(0.5, 3, by = 0.5),
@@ -2988,25 +2988,7 @@ if (FALSE) {  # Set to TRUE to run grid search
     feature_set = "historical"
   )
   
-  splits_climate_historical <- create_train_test_splits(dengue_data_engineered, climate_data_engineered, 
-                                                feature_set = "climate_historical")
-  # All features combined
-  results_all <- grid_search_bart(
-    k_range = seq(0.5, 3, by = 0.5),
-    power_range = seq(0.5, 3, by = 0.5),
-    ntree_range = seq(50, 250, by = 50),
-    start_week = 4,
-    end_week = 48,
-    weeks_ahead = 4,
-    x_train = splits_climate_historical$x_train_df,
-    y_train = splits_climate_historical$y_train,
-    y_test = splits_climate_historical$y_test,
-    lambda = splits_climate_historical$lambda,
-    feature_set = "climate_historical"
-  )
-  
-  splits_climate_gtrends_historical <- create_train_test_splits(dengue_data_engineered, climate_data_engineered, 
-                                                        feature_set = "climate_gtrends_historical")
+  splits_climate_gtrends_historical <- create_train_test_splits(city = 'poa', feature_set = "climate_gtrends_historical")
   # All features combined
   results_all <- grid_search_bart(
     k_range = seq(0.5, 3, by = 0.5),
@@ -3022,16 +3004,36 @@ if (FALSE) {  # Set to TRUE to run grid search
     feature_set = "climate_gtrends_historical"
   )
   
+  splits_climate_historical <- create_train_test_splits(city = 'poa', feature_set = "climate_historical")
+  # All features combined
+  results_all <- grid_search_bart(
+    k_range = seq(0.5, 3, by = 0.5),
+    power_range = seq(0.5, 3, by = 0.5),
+    ntree_range = seq(50, 250, by = 50),
+    start_week = 4,
+    end_week = 48,
+    weeks_ahead = 4,
+    x_train = splits_climate_historical$x_train_df,
+    y_train = splits_climate_historical$y_train,
+    y_test = splits_climate_historical$y_test,
+    lambda = splits_climate_historical$lambda,
+    feature_set = "climate_historical"
+  )
+  
+
+  
   # Visualize results
   # vis <- visualize_grid_search_results("CLIMATE_GTRENDS_HISTORICAL_final_grid_search_results.csv")
 }
+
+
 
 
 # Models to ensemble
 predictions_list <- list(climate_gtrends_historical_predictions, historical_predictions)
 model_names <- c("climate_gtrends_historical_predictions", "historical_predictions")
 
-if (FALSE) {
+if (TRUE) {
   # Same function call works for any number
   ensemble_result <- create_flexible_ensemble(
     predictions_list = predictions_list,
